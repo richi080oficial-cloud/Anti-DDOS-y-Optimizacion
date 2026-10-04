@@ -36,7 +36,13 @@ Otras limitaciones conocidas:
 
 ## Instalación
 
-Dos comandos distintos según la máquina (se pueden usar los dos en la misma si el panel también es nodo).
+**Panel y Wings en la misma máquina (servidor dedicado único)** — un solo comando, como root. Instala la extensión, el firewall del nodo, genera la clave de la API y se la entrega al agente solo (además el agente lee los bloqueos del panel en local, sin red ni clave):
+
+    bash <(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/AntiDDoS/main/install.sh) install-all
+
+Añade `--tcp=25565 --udp=19132` para saltarte las preguntas de puertos.
+
+Si el panel y los nodos están en **máquinas distintas**, usa los dos comandos siguientes (uno en el panel, otro en cada nodo).
 
 **En el panel** (instala la extensión, genera la clave de la API y añade el menú):
 

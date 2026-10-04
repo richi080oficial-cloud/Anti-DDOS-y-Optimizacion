@@ -51,6 +51,7 @@ BAN_SECONDS=900          # duracion del bloqueo automatico
 ATTACK_MODE=0            # 1 = limites estrictos
 SYSCTL=1                 # 1 = aplicar ajustes de kernel
 PANEL_URL=""             # https://panel.ejemplo.com  (para 'sync')
+PANEL_DIR=""             # ruta del panel si esta en ESTA maquina (sync local, sin clave)
 API_KEY=""               # clave de la API de Anti-DDoS y Optimización del panel
 STATIC_WHITELIST="127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
 EXTRA_WHITELIST=""       # IPs/CIDR adicionales separados por espacio
@@ -263,13 +264,28 @@ EOF
 }
 
 # ── Sincronizacion con el panel ───────────────────────────────────────────────
+# Descarga la lista del panel. Si el panel esta en esta misma maquina
+# (PANEL_DIR) se lee directamente con artisan: sin red y sin clave.
+fetch_feed() {
+    if [[ -n "$PANEL_DIR" && -f "$PANEL_DIR/artisan" ]] && have php; then
+        local owner; owner="$(stat -c '%U' "$PANEL_DIR/public" 2>/dev/null || echo root)"
+        if [[ "$owner" != "root" ]] && have runuser; then
+            ( cd "$PANEL_DIR" && runuser -u "$owner" -- php artisan antiddos:manage feed ) 2>&1
+        else
+            ( cd "$PANEL_DIR" && php artisan antiddos:manage feed ) 2>&1
+        fi
+        return
+    fi
+    have curl || { echo "curl no esta instalado"; return 1; }
+    curl -fsS --max-time 20 -H "X-Antiddos-Key: ${API_KEY}" "${PANEL_URL%/}/api/antiddos/feed" 2>&1
+}
+
 sync_feed() {
-    [[ -n "$PANEL_URL" && -n "$API_KEY" ]] || return 0
-    have curl || { warn "curl no está instalado; no se puede sincronizar con el panel."; return 1; }
+    [[ -n "$PANEL_DIR" || ( -n "$PANEL_URL" && -n "$API_KEY" ) ]] || return 0
 
     local body
-    if ! body="$(curl -fsS --max-time 20 -H "X-Antiddos-Key: ${API_KEY}" "${PANEL_URL%/}/api/antiddos/feed" 2>&1)"; then
-        warn "No se pudo descargar la lista del panel: ${body:0:200}"
+    if ! body="$(fetch_feed)"; then
+        warn "No se pudo obtener la lista del panel: ${body:0:200}"
         log "feed: fallo de descarga"
         return 1
     fi
@@ -434,7 +450,7 @@ cmd_attack() {
 
 set_conf() {
     local key="$1" value="$2"
-    [[ "$key" =~ ^(TCP_PORTS|UDP_PORTS|WEB_PORTS|SSH_PORT|CONN_LIMIT|SYN_RATE|SYN_BURST|UDP_RATE|UDP_BURST|ICMP_RATE|BAN_SECONDS|ATTACK_MODE|SYSCTL|PANEL_URL|API_KEY|EXTRA_WHITELIST)$ ]] \
+    [[ "$key" =~ ^(TCP_PORTS|UDP_PORTS|WEB_PORTS|SSH_PORT|CONN_LIMIT|SYN_RATE|SYN_BURST|UDP_RATE|UDP_BURST|ICMP_RATE|BAN_SECONDS|ATTACK_MODE|SYSCTL|PANEL_URL|PANEL_DIR|API_KEY|EXTRA_WHITELIST)$ ]] \
         || fail "Clave desconocida: ${key}"
     [[ "$value" =~ ^[A-Za-z0-9:,./_\ -]*$ ]] || fail "Valor con caracteres no permitidos."
     mkdir -p "$(dirname "$CONF")"

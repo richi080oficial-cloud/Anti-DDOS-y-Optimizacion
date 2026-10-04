@@ -18,7 +18,7 @@ use Pterodactyl\Models\Server;
 class ShieldCommand extends Command
 {
     protected $signature = 'antiddos:manage
-                            {action=info : info | apikey | purge | prune | ban | unban | bans | whitelist | optimize}
+                            {action=info : info | apikey | purge | prune | feed | ban | unban | bans | whitelist | optimize}
                             {args?* : Argumentos de la accion (IP, add|del|list, apply|revert|list...)}
                             {--key= : Clave concreta a usar con la accion apikey}
                             {--if-missing : Con apikey, no hace nada si ya existe una clave}
@@ -57,6 +57,7 @@ class ShieldCommand extends Command
             'apikey' => $this->apiKey(),
             'purge' => $this->purge(),
             'prune' => $this->prune($blocks),
+            'feed' => $this->feed($blocks),
             'ban' => $this->ban($blocks, $args),
             'unban' => $this->unban($blocks, $args),
             'bans' => $this->bans($blocks),
@@ -142,6 +143,14 @@ class ShieldCommand extends Command
         ShieldSetting::flush();
 
         $this->info("Bloqueos caducados eliminados: $removed (y eventos antiguos).");
+
+        return self::SUCCESS;
+    }
+
+    /** Lista de bloqueos y lista blanca en texto plano (la lee el agente de nodo local). */
+    protected function feed(BlockManager $blocks): int
+    {
+        $this->getOutput()->write($blocks->feed());
 
         return self::SUCCESS;
     }

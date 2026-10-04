@@ -21,7 +21,7 @@ CONF_DIR="/etc/antiddos"
 CONF="${CONF_DIR}/agent.conf"
 UNIT_DIR="/etc/systemd/system"
 
-TCP_PORTS=""; UDP_PORTS=""; WEB_PORTS=""; SSH_PORT=""; PANEL_URL=""; API_KEY=""
+TCP_PORTS=""; UDP_PORTS=""; WEB_PORTS=""; SSH_PORT=""; PANEL_URL=""; API_KEY=""; PANEL_LOCAL=""
 NO_PROMPT=0
 
 if [ -t 1 ]; then
@@ -101,6 +101,7 @@ BAN_SECONDS="900"
 ATTACK_MODE="0"
 SYSCTL="1"
 PANEL_URL="${PANEL_URL}"
+PANEL_DIR="${PANEL_LOCAL}"
 API_KEY="${API_KEY}"
 EXTRA_WHITELIST=""
 EOF
@@ -174,6 +175,15 @@ do_install() {
     install -m 0755 "${SOURCE_DIR}/scripts/optimize-host.sh" "$SBIN_TUNE"
     sed -i 's/\r$//' "$SBIN_FW" "$SBIN_TUNE"
 
+    # Panel en esta misma maquina: la lista de bloqueos se lee en local (sin clave).
+    if [[ -z "$PANEL_LOCAL" && -z "$PANEL_URL" ]]; then
+        local d
+        for d in /var/www/pterodactyl /var/www/panel /var/www/html/pterodactyl /srv/pterodactyl; do
+            if [[ -f "$d/artisan" && -d "$d/app/Extensions/AntiDDoS" ]]; then PANEL_LOCAL="$d"; break; fi
+        done
+        [[ -n "$PANEL_LOCAL" ]] && info "Panel con Anti-DDoS detectado en ${PANEL_LOCAL}: los bloqueos se sincronizan en local (sin clave)."
+    fi
+
     if [[ ! -f "$CONF" ]]; then
         TCP_PORTS="${TCP_PORTS:-$(ask 'Puertos TCP de Minecraft a proteger (coma o rango a:b)' '25565')}"
         UDP_PORTS="${UDP_PORTS:-$(ask 'Puertos UDP (Bedrock/Geyser, vacío = ninguno)' '')}"
@@ -187,6 +197,7 @@ do_install() {
         [[ -n "$WEB_PORTS" ]] && "$SBIN_FW" set WEB_PORTS "$WEB_PORTS" >/dev/null
         [[ -n "$SSH_PORT"  ]] && "$SBIN_FW" set SSH_PORT  "$SSH_PORT"  >/dev/null
         [[ -n "$PANEL_URL" ]] && "$SBIN_FW" set PANEL_URL "$PANEL_URL" >/dev/null
+        [[ -n "$PANEL_LOCAL" ]] && "$SBIN_FW" set PANEL_DIR "$PANEL_LOCAL" >/dev/null
         [[ -n "$API_KEY"   ]] && "$SBIN_FW" set API_KEY   "$API_KEY"   >/dev/null
     fi
 
@@ -247,6 +258,7 @@ for arg in "$@"; do
         --ssh=*)       SSH_PORT="${arg#*=}" ;;
         --panel-url=*) PANEL_URL="${arg#*=}" ;;
         --key=*)       API_KEY="${arg#*=}" ;;
+        --panel-dir=*) PANEL_LOCAL="${arg#*=}" ;;
         --yes|-y|--force) NO_PROMPT=1 ;;
         *) warn "Opción desconocida ignorada: $arg" ;;
     esac
@@ -265,6 +277,7 @@ if [[ "$ACTION" == "install" ]]; then
     check_value "--web"       "$WEB_PORTS" '^[0-9:,]+$'
     check_value "--ssh"       "$SSH_PORT"  '^[0-9]+$'
     check_value "--panel-url" "$PANEL_URL" '^https?://[A-Za-z0-9._:/-]+$'
+    check_value "--panel-dir" "$PANEL_LOCAL" '^/[A-Za-z0-9._/-]+$'
     check_value "--key"       "$API_KEY"   '^[A-Za-z0-9._-]+$'
 fi
 

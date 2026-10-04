@@ -320,6 +320,34 @@ do_uninstall() {
     ok "Anti-DDoS y Optimización desinstalado por completo. No queda nada."
 }
 
+# ── Todo en uno: panel + nodo en la misma máquina ─────────────────────────────
+# Instala/actualiza la extensión del panel y el firewall del nodo de una vez.
+# La clave de la API se genera sola y se entrega al agente (además, al estar el
+# panel en esta máquina, el agente lee los bloqueos en local, sin red ni clave).
+do_install_all() {
+    require_panel
+    sync_sources
+
+    info "1/2 · Instalando la extensión en el panel…"
+    run_installer install
+    install_cli
+
+    info "2/2 · Instalando el firewall anti-DDoS en este nodo…"
+    local key url
+    key="$(od -An -N24 -tx1 /dev/urandom | tr -d ' 
+')"
+    run_installer apikey --key="$key" >/dev/null
+    url="$(grep -m1 -E '^APP_URL=' "$PANEL/.env" 2>/dev/null | sed -E 's/^APP_URL=//; s/^"//; s/"$//; s#/$##' || true)"
+
+    local args=(install --panel-dir="$PANEL" --key="$key")
+    [[ "$url" =~ ^https?://[A-Za-z0-9._:/-]+$ ]] && args+=(--panel-url="$url")
+    [[ "$FORCE" == "1" ]] && args+=(--yes)
+    bash "$SRC_DIR/$NODE_REL" "${args[@]}" "${PASSTHRU[@]}"
+
+    ok "Todo instalado: panel + nodo. Los bloqueos del panel llegan al firewall en menos de 30 s."
+    info "Panel: ${url:-tu-panel}/admin/extensions/antiddos   ·   Estado: sudo antiddos status"
+}
+
 # ── Agente de nodo (firewall anti-DDoS) ───────────────────────────────────────
 do_node_install() {
     sync_sources
@@ -481,6 +509,9 @@ usage() {
     cat <<EOF
 Anti-DDoS y Optimización — anti-DDoS y optimización para Pterodactyl
 
+TODO EN UNO (panel y Wings en la misma máquina)
+  install-all [--tcp=25565 --udp=19132]   Instala panel + firewall del nodo; la clave se gestiona sola
+
 PANEL (extensión + escudo web + optimizador de servidores)
   install               Instala la extensión en el panel
                         (si ya está instalada, ofrece reinstalar o actualizar)
@@ -533,7 +564,7 @@ Variables de entorno:
   PANEL_DIR, WEB_USER, REPO_URL, REPO_BRANCH, SRC_DIR (por defecto /opt/antiddos)
 
 Ejemplos:
-  bash <(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/AntiDDoS/main/install.sh) install
+  bash <(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/AntiDDoS/main/install.sh) install-all
   sudo antiddos node-install --tcp=25565:25600 --udp=19132 --panel-url=https://panel.midominio.com --key=XXXX
   sudo antiddos attack-on
   sudo antiddos optimize-server apply --profile=crowded --all --restart
@@ -576,6 +607,7 @@ case "$ACTION" in
     apikey)                 do_apikey ;;
     info)                   do_info ;;
     prune)                  do_prune ;;
+    install-all|all)        do_install_all ;;
     node-install)           do_node_install ;;
     node-uninstall)         do_node_uninstall ;;
     node-status)            do_node_status ;;
