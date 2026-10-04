@@ -1,0 +1,37 @@
+{
+  "name": "Anti-DDoS y Optimización",
+  "identifier": "antiddos",
+  "version": "1.0.0",
+  "description": "Anti-DDoS (firewall del nodo + escudo del panel) y optimizacion de servidores de Minecraft para Pterodactyl.",
+  "author": "Vexa Studio",
+  "target": {
+    "panel": ">=1.11.0 <2.0.0",
+    "php": ">=8.1",
+    "laravel": "^10.0"
+  },
+  "requires_blueprint": false,
+  "install": {
+    "target_dir": "app/Extensions/AntiDDoS",
+    "provider": "Pterodactyl\\Extensions\\AntiDDoS\\Providers\\AntiDDoSServiceProvider"
+  },
+  "commands": [
+    "antiddos install",
+    "antiddos reinstall",
+    "antiddos update",
+    "antiddos uninstall",
+    "antiddos status",
+    "antiddos apikey",
+    "antiddos ban",
+    "antiddos unban",
+    "antiddos bans",
+    "antiddos whitelist",
+    "antiddos node-install",
+    "antiddos node-uninstall",
+    "antiddos node-status",
+    "antiddos fw",
+    "antiddos attack-on",
+    "antiddos attack-off",
+    "antiddos optimize-host",
+    "antiddos optimize-server"
+  ]
+}
