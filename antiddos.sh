@@ -107,7 +107,7 @@ sync_sources() {
     if [[ -d "$SRC_DIR/.git" ]]; then
         info "Actualizando el código en $SRC_DIR…"
         git -C "$SRC_DIR" remote set-url origin "$REPO_URL"
-        git -C "$SRC_DIR" fetch --quiet origin "$REPO_BRANCH"
+        git -C "$SRC_DIR" fetch --quiet --depth 1 origin "+refs/heads/$REPO_BRANCH:refs/remotes/origin/$REPO_BRANCH"
         git -C "$SRC_DIR" reset --hard --quiet "origin/$REPO_BRANCH"
         git -C "$SRC_DIR" clean -fd --quiet
     else
@@ -129,7 +129,7 @@ sync_sources() {
 }
 
 remote_has_changes() {
-    git -C "$SRC_DIR" fetch --quiet origin "$REPO_BRANCH"
+    git -C "$SRC_DIR" fetch --quiet --depth 1 origin "+refs/heads/$REPO_BRANCH:refs/remotes/origin/$REPO_BRANCH"
     [[ "$(git -C "$SRC_DIR" rev-parse HEAD)" != "$(git -C "$SRC_DIR" rev-parse "origin/$REPO_BRANCH")" ]]
 }
 
