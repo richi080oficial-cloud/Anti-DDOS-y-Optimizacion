@@ -243,10 +243,14 @@ class AdminController extends Controller
         $data = $request->validate([
             'server_id' => 'required|integer|exists:servers,id',
             'port' => 'nullable|integer|min:1024|max:65535',
+            'min' => 'nullable|integer|min:1024|max:65535',
+            'max' => 'nullable|integer|min:1024|max:65535',
         ]);
 
         $server = Server::query()->findOrFail($data['server_id']);
-        $port = isset($data['port']) ? (int) $data['port'] : $this->changer->suggest($server);
+        $port = isset($data['port'])
+            ? (int) $data['port']
+            : $this->changer->suggest($server, [], (int) ($data['min'] ?? PortAdvisor::SAFE_MIN), (int) ($data['max'] ?? PortAdvisor::SAFE_MAX));
 
         if (!$port) {
             return $this->tab('ports')->with('antiddos:error', 'No se encontró ningún puerto libre recomendado en ese nodo. Indica uno a mano.');
@@ -263,16 +267,25 @@ class AdminController extends Controller
         $data = $request->validate([
             'servers' => 'required|array|min:1',
             'servers.*' => 'integer|min:1',
+            'min' => 'nullable|integer|min:1024|max:65535',
+            'max' => 'nullable|integer|min:1024|max:65535',
         ]);
 
         @set_time_limit(300);
+
+        $min = (int) ($data['min'] ?? PortAdvisor::SAFE_MIN);
+        $max = (int) ($data['max'] ?? PortAdvisor::SAFE_MAX);
+
+        if ($max - $min < 50) {
+            return $this->tab('ports')->with('antiddos:error', 'El rango de puertos debe tener al menos 50 puertos de margen.');
+        }
 
         $ids = array_slice(array_values(array_unique(array_map('intval', $data['servers']))), 0, 40);
         $reports = [];
         $used = [];
 
         foreach (Server::query()->whereIn('id', $ids)->get() as $server) {
-            $port = $this->changer->suggest($server, $used);
+            $port = $this->changer->suggest($server, $used, $min, $max);
 
             if (!$port) {
                 $reports[$server->name] = ['ok' => [], 'warn' => ['No se encontró un puerto libre recomendado.']];

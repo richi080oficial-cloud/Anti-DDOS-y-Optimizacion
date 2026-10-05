@@ -419,20 +419,27 @@
                         <summary>¿Qué se considera un puerto poco recomendable?</summary>
                         <ul style="margin:10px 0 0; padding-left:18px;">
                             <li><b>Rojo:</b> puertos reservados (menores de 1024) o de servicios conocidos (SSH, web, MySQL, Redis, Wings…). Cámbialos ya.</li>
-                            <li><b>Naranja:</b> el puerto por defecto (25565 / 19132, los que más escanean los bots), los del rango de puertos temporales de Linux (32768+) y los que el firewall no está protegiendo.</li>
-                            <li><b>Puerto recomendado:</b> uno alto y libre entre 20000 y 32000. Con la detección automática, el firewall protege el nuevo puerto solo.</li>
+                            <li><b>Naranja:</b> el puerto por defecto (25565 / 19132) y su entorno (25500-25700), que es lo que más barren los bots; el rango típico de servicios web (8000-8999); los del rango de puertos temporales de Linux (32768+) y los que el firewall no está protegiendo.</li>
+                            <li><b>Puerto recomendado:</b> uno alto y libre, por defecto entre 20000 y 32000 (puedes cambiar el rango arriba). Con la detección automática, el firewall protege el nuevo puerto solo.</li>
                         </ul>
                     </details>
 
                     <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin:14px 0;">
                         <input type="text" id="ad-pfilter" class="form-control" style="max-width:240px;" placeholder="Buscar servidor…">
-                        <label class="check" style="margin:0;"><input type="checkbox" id="ad-ponly" checked><span>Solo con problemas</span></label>
+                        <label class="check" style="margin:0;"><input type="checkbox" id="ad-ponly"><span>Solo con problemas</span></label>
                         <label class="check" style="margin:0;"><input type="checkbox" id="ad-restart"><span>Reiniciar el servidor al cambiar (si está encendido)</span></label>
+                    </div>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:0 0 14px;">
+                        <span>Puerto recomendado al azar entre</span>
+                        <input type="number" id="ad-pmin" class="form-control input-sm" style="width:100px;" min="1024" max="65535" value="20000">
+                        <span>y</span>
+                        <input type="number" id="ad-pmax" class="form-control input-sm" style="width:100px;" min="1024" max="65535" value="32000">
+                        <span class="muted small">(evita 8000-8999 y los puertos por defecto)</span>
                     </div>
 
                     <div class="alert w" style="margin-bottom:14px;">Al cambiar un puerto, <b>los jugadores tendrán que usar la dirección nueva</b>. Si usas un registro SRV o un proxy, actualízalo. El cambio surte efecto al reiniciar el servidor.</div>
 
-                    <form id="ad-ports-bulk" action="{{ route('admin.extensions.antiddos.ports.auto') }}" method="POST">@csrf<input type="hidden" name="restart" value="0" id="ad-bulk-restart"></form>
+                    <form id="ad-ports-bulk" action="{{ route('admin.extensions.antiddos.ports.auto') }}" method="POST">@csrf<input type="hidden" name="restart" value="0" id="ad-bulk-restart"><input type="hidden" name="min" value="20000" id="ad-bulk-min"><input type="hidden" name="max" value="32000" id="ad-bulk-max"></form>
 
                     <div class="tw">
                         <table class="table" id="ad-ports">
@@ -458,6 +465,8 @@
                                             @csrf
                                             <input type="hidden" name="server_id" value="{{ $row['id'] }}">
                                             <input type="hidden" name="restart" value="0">
+                                            <input type="hidden" name="min" value="20000">
+                                            <input type="hidden" name="max" value="32000">
                                             <input class="form-control input-sm" type="number" name="port" min="1024" max="65535" placeholder="Nuevo">
                                             <button class="btn btn-sm btn-primary" type="submit" data-confirm="¿Cambiar el puerto de este servidor?">Cambiar</button>
                                             <button class="btn btn-sm btn-default" type="submit" data-random="1" data-confirm="¿Cambiar a un puerto recomendado al azar?" title="Elige un puerto libre recomendado">🎲 Aleatorio</button>
@@ -473,6 +482,7 @@
                 </div>
                 <div class="card-f">
                     <button type="submit" form="ad-ports-bulk" class="btn btn-warning" id="ad-bulk-btn">Poner un puerto recomendado a los seleccionados</button>
+                    <button type="button" class="btn btn-default" id="ad-psel-all">Marcar todos los visibles</button>
                     <button type="button" class="btn btn-default" id="ad-psel-bad">Marcar los de problema</button>
                     <button type="button" class="btn btn-default" id="ad-psel-none">Quitar marcas</button>
                     <span class="muted small" id="ad-pcount" style="margin-left:8px;">0 seleccionados</span>
@@ -605,6 +615,9 @@
                 pfilter();
                 $$('.ad-psel').forEach(function (c) { c.addEventListener('change', pcount); });
                 $('#ad-psel-none').addEventListener('click', function () { $$('.ad-psel').forEach(function (c) { c.checked = false; }); pcount(); });
+                $('#ad-psel-all').addEventListener('click', function () {
+                    prow.forEach(function (tr) { if (tr.style.display !== 'none') { $('.ad-psel', tr).checked = true; } }); pcount();
+                });
                 $('#ad-psel-bad').addEventListener('click', function () {
                     prow.forEach(function (tr) { if (tr.style.display !== 'none') { $('.ad-psel', tr).checked = tr.getAttribute('data-level') !== 'ok'; } }); pcount();
                 });
@@ -618,12 +631,16 @@
                         if (random) { $('input[name=port]', f).value = ''; }
                         if (msg && !confirm(msg + (random ? '' : ' Puerto: ' + $('input[name=port]', f).value))) { e.preventDefault(); return; }
                         $('input[name=restart]', f).value = $('#ad-restart').checked ? '1' : '0';
+                        $('input[name=min]', f).value = $('#ad-pmin').value || '20000';
+                        $('input[name=max]', f).value = $('#ad-pmax').value || '32000';
                     });
                 });
                 $('#ad-ports-bulk').addEventListener('submit', function (e) {
                     if (!$$('.ad-psel:checked').length) { e.preventDefault(); alert('Marca al menos un servidor.'); return; }
                     if (!confirm('Se cambiará el puerto de ' + $$('.ad-psel:checked').length + ' servidor(es) a uno recomendado al azar. Los jugadores tendrán que usar la dirección nueva. ¿Continuar?')) { e.preventDefault(); return; }
                     $('#ad-bulk-restart').value = $('#ad-restart').checked ? '1' : '0';
+                    $('#ad-bulk-min').value = $('#ad-pmin').value || '20000';
+                    $('#ad-bulk-max').value = $('#ad-pmax').value || '32000';
                 });
             }
 

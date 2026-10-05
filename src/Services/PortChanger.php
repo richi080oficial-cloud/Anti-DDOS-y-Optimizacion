@@ -29,8 +29,11 @@ class PortChanger
      * Puerto recomendado y libre para el servidor: primero una asignacion libre
      * ya existente en el rango seguro; si no hay, uno aleatorio sin usar.
      */
-    public function suggest(Server $server, array $exclude = []): ?int
+    public function suggest(Server $server, array $exclude = [], int $min = PortAdvisor::SAFE_MIN, int $max = PortAdvisor::SAFE_MAX): ?int
     {
+        $min = max(1024, min($min, $max));
+        $max = min(65535, max($min, $max));
+
         $current = Allocation::query()->find($server->allocation_id);
 
         if ($current === null) {
@@ -38,11 +41,11 @@ class PortChanger
         }
 
         $reserved = $this->reserved($current->node_id);
-        $ok = fn (int $p) => !in_array($p, $exclude, true) && !in_array($p, $reserved, true) && !isset(PortAdvisor::SERVICE_PORTS[$p]) && !isset(PortAdvisor::DEFAULT_PORTS[$p]);
+        $ok = fn (int $p) => !in_array($p, $exclude, true) && !in_array($p, $reserved, true) && !isset(PortAdvisor::SERVICE_PORTS[$p]) && !isset(PortAdvisor::DEFAULT_PORTS[$p]) && !($p >= 8000 && $p <= 8999);
 
         $free = Allocation::query()
             ->where('node_id', $current->node_id)->where('ip', $current->ip)->whereNull('server_id')
-            ->whereBetween('port', [PortAdvisor::SAFE_MIN, PortAdvisor::SAFE_MAX])
+            ->whereBetween('port', [$min, $max])
             ->pluck('port')->map(fn ($p) => (int) $p)->filter($ok)->values()->all();
 
         if ($free !== []) {
@@ -52,7 +55,7 @@ class PortChanger
         $taken = Allocation::query()->where('node_id', $current->node_id)->where('ip', $current->ip)->pluck('port')->flip();
 
         for ($i = 0; $i < 300; $i++) {
-            $p = random_int(PortAdvisor::SAFE_MIN, PortAdvisor::SAFE_MAX);
+            $p = random_int($min, $max);
 
             if (!isset($taken[$p]) && $ok($p)) {
                 return $p;

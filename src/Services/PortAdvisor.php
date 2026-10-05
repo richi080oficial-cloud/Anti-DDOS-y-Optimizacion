@@ -49,6 +49,14 @@ class PortAdvisor
             $issues[] = ['level' => 'warn', 'text' => 'Es el puerto por defecto (' . self::DEFAULT_PORTS[$port] . '): los bots lo escanean constantemente. Mejor un puerto alto y un registro SRV.'];
         }
 
+        if ($port >= 8000 && $port <= 8999 && !isset(self::SERVICE_PORTS[$port])) {
+            $issues[] = ['level' => 'warn', 'text' => 'Rango típico de servicios web (8000-8999: HTTP alternativo, paneles, Dynmap en 8123…): los escáneres lo rastrean como web y puede chocar con otros servicios. Mejor 20000-32000.'];
+        }
+
+        if ($port >= 25500 && $port <= 25700 && !isset(self::DEFAULT_PORTS[$port])) {
+            $issues[] = ['level' => 'warn', 'text' => 'Está en el rango que más barren los bots de Minecraft (25500-25700, alrededor del puerto por defecto).'];
+        }
+
         if ($port >= self::EPHEMERAL_FROM) {
             $issues[] = ['level' => 'warn', 'text' => 'Está en el rango de puertos temporales de Linux (32768+): puede coincidir con conexiones salientes del sistema.'];
         }
