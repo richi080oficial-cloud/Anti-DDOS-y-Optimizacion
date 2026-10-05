@@ -28,5 +28,5 @@ fi
 
 echo "[antiddos] No se encontró el gestor en ${MANAGER} ni el instalador en ${INSTALLER}." >&2
 echo "[antiddos] Reinstala con:" >&2
-echo "  bash <(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/AntiDDoS/main/install.sh) install" >&2
+echo "  bash <(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/Anti-DDOS-y-Optimizacion/main/install.sh) install" >&2
 exit 1

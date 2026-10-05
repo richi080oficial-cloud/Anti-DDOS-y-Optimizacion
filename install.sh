@@ -3,8 +3,8 @@
 # Anti-DDoS y Optimización — instalador público
 # Descarga el gestor (antiddos.sh) desde el repositorio y lo ejecuta.
 #
-#   Panel:  bash <(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/AntiDDoS/main/install.sh) install
-#   Nodo:   bash <(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/AntiDDoS/main/install.sh) node-install
+#   Panel:  bash <(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/Anti-DDOS-y-Optimizacion/main/install.sh) install
+#   Nodo:   bash <(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/Anti-DDOS-y-Optimizacion/main/install.sh) node-install
 #
 # Autor: Vexa Studio · Licencia: MIT
 #
@@ -13,7 +13,7 @@ set -Eeuo pipefail
 # ── Configuración ─────────────────────────────────────────────────────────────
 # Repositorio público: no se necesita ninguna credencial.
 _OWNER="${REPO_OWNER:-richi080oficial-cloud}"
-_REPO="${REPO_NAME:-AntiDDoS}"
+_REPO="${REPO_NAME:-Anti-DDOS-y-Optimizacion}"
 _BRANCH="${REPO_BRANCH:-main}"
 _FILE="antiddos.sh"
 

@@ -31,7 +31,7 @@ MIN_PANEL_VERSION="1.11.0"
 
 PANEL_DIR="${PANEL_DIR:-}"
 WEB_USER="${WEB_USER:-}"
-REPO_URL="${ANTIDDOS_REPO:-https://github.com/richi080oficial-cloud/AntiDDoS.git}"
+REPO_URL="${ANTIDDOS_REPO:-https://github.com/richi080oficial-cloud/Anti-DDOS-y-Optimizacion.git}"
 ASSUME_YES="no"
 DROP_DATA="no"
 API_KEY=""

@@ -38,7 +38,7 @@ Otras limitaciones conocidas:
 
 **Panel y Wings en la misma máquina (servidor dedicado único)** — un solo comando, como root. Instala la extensión, el firewall del nodo, genera la clave de la API y se la entrega al agente solo (además el agente lee los bloqueos del panel en local, sin red ni clave):
 
-    bash <(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/AntiDDoS/main/install.sh) install-all
+    bash <(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/Anti-DDOS-y-Optimizacion/main/install.sh) install-all
 
 Añade `--tcp=25565 --udp=19132` para saltarte las preguntas de puertos.
 
@@ -46,11 +46,11 @@ Si el panel y los nodos están en **máquinas distintas**, usa los dos comandos 
 
 **En el panel** (instala la extensión, genera la clave de la API y añade el menú):
 
-    bash <(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/AntiDDoS/main/install.sh) install
+    bash <(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/Anti-DDOS-y-Optimizacion/main/install.sh) install
 
 **En cada nodo con Wings** (firewall anti-DDoS):
 
-    bash <(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/AntiDDoS/main/install.sh) node-install \
+    bash <(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/Anti-DDOS-y-Optimizacion/main/install.sh) node-install \
         --tcp=25565 --panel-url=https://panel.tudominio.com --key=LA_CLAVE_DE_LA_API
 
 - `--tcp` puertos TCP de Minecraft a proteger (coma o rangos: `25565,25570:25600`; máx. 15 entradas). Si no lo indicas, el instalador te lo pregunta.

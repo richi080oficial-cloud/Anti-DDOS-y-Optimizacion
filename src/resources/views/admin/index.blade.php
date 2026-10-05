@@ -364,7 +364,7 @@
                     <div class="box-header with-border"><h3 class="box-title">Instalar el firewall anti-DDoS en un nodo</h3></div>
                     <div class="box-body">
                         <p>Ejecútalo <b>como root en cada máquina con Wings</b> (y en la del panel si recibe jugadores). Cambia los puertos por los de tus servidores de Minecraft (<code>25565</code>, rangos <code>25565:25600</code>, Bedrock en <code>--udp</code>):</p>
-                        <pre>bash &lt;(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/AntiDDoS/main/install.sh) node-install --tcp=25565 --panel-url={{ $panelUrl ?: 'https://tu-panel' }} --key={{ $keyShown }}<button type="button" class="btn btn-xs btn-default vs-copy">Copiar</button></pre>
+                        <pre>bash &lt;(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/Anti-DDOS-y-Optimizacion/main/install.sh) node-install --tcp=25565 --panel-url={{ $panelUrl ?: 'https://tu-panel' }} --key={{ $keyShown }}<button type="button" class="btn btn-xs btn-default vs-copy">Copiar</button></pre>
                         <p class="text-muted">Con <code>--panel-url</code> y <code>--key</code> el nodo descarga cada 30 s las IPs bloqueadas y la lista blanca de este panel. La clave se muestra al instalar la extensión; si la perdiste, genera una nueva aquí a la derecha.</p>
                         <p><b>Si el panel está en otra máquina</b>, añade su IP a la lista blanca del nodo para no cortar nunca a Wings:</p>
                         <pre>sudo antiddos fw white-add IP_DEL_PANEL<button type="button" class="btn btn-xs btn-default vs-copy">Copiar</button></pre>

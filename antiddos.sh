@@ -12,7 +12,7 @@
 #
 set -Eeuo pipefail
 
-REPO_URL="${REPO_URL:-${ANTIDDOS_REPO:-https://github.com/richi080oficial-cloud/AntiDDoS.git}}"
+REPO_URL="${REPO_URL:-${ANTIDDOS_REPO:-https://github.com/richi080oficial-cloud/Anti-DDOS-y-Optimizacion.git}}"
 REPO_BRANCH="${REPO_BRANCH:-main}"
 SRC_DIR="${SRC_DIR:-/opt/antiddos}"
 INSTALLER_REL="scripts/addon-install.sh"
@@ -564,7 +564,7 @@ Variables de entorno:
   PANEL_DIR, WEB_USER, REPO_URL, REPO_BRANCH, SRC_DIR (por defecto /opt/antiddos)
 
 Ejemplos:
-  bash <(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/AntiDDoS/main/install.sh) install-all
+  bash <(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/Anti-DDOS-y-Optimizacion/main/install.sh) install-all
   sudo antiddos node-install --tcp=25565:25600 --udp=19132 --panel-url=https://panel.midominio.com --key=XXXX
   sudo antiddos attack-on
   sudo antiddos optimize-server apply --profile=crowded --all --restart
