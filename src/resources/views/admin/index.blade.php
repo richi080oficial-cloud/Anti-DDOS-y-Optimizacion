@@ -77,6 +77,11 @@
         .ad .chart-wrap { position: relative; width: 100%; }
         .ad #ad-chart { width: 100%; height: 320px; display: block; }
         .ad .tip { position: absolute; pointer-events: none; display: none; z-index: 5; padding: 8px 10px; border-radius: 6px; font-size: 12px; line-height: 1.5; background: rgba(20,20,20,.92); color: #fff; white-space: nowrap; }
+        .ad .origin { white-space: nowrap; }
+        .ad .net small { display: block; opacity: .7; }
+        .ad tr.det td { background: rgba(127,127,127,.07); font-size: 12.5px; }
+        .ad tr.det ul { margin: 4px 0 8px; padding-left: 18px; }
+        .ad .link { cursor: pointer; text-decoration: underline; opacity: .8; }
         .ad .ctrl-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-bottom: 12px; }
         .ad .ctrl-row label { margin: 0; font-weight: normal; font-size: 12px; display: flex; flex-direction: column; gap: 3px; opacity: .9; }
         .ad .kpi .l i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
@@ -312,6 +317,68 @@
                 </div>
             </div>
 
+            <div class="grid">
+                <div class="col">
+                    <form action="{{ route('admin.extensions.antiddos.policy.update') }}" method="POST" class="card">
+                        @csrf
+                        @method('PATCH')
+                        <div class="card-h"><h3>Política de bloqueo de IPs</h3>
+                            <span class="pill {{ $banModeManaged ? 'ok' : 'warn' }}">{{ $banModeManaged ? 'Gestionada desde el panel' : 'La del nodo' }}</span></div>
+                        <div class="card-b">
+                            <p class="muted" style="margin-top:0;">Decide <b>cuándo</b> el firewall bloquea una IP por su cuenta. En todos los modos el exceso de conexiones se frena; lo que cambia es si además se banea.</p>
+                            <label class="check"><input type="radio" name="ban_mode" value="monitor" {{ $banMode === 'monitor' ? 'checked' : '' }}>
+                                <span><b>Observación</b> — nunca bloquea una IP<small>Solo frena el exceso de paquetes. Es el modo más seguro contra falsos positivos; úsalo para comprobar qué haría el firewall.</small></span></label>
+                            <label class="check"><input type="radio" name="ban_mode" value="balanced" {{ $banMode === 'balanced' ? 'checked' : '' }}>
+                                <span><b>Equilibrada (recomendada)</b> — bloquea solo ante un flood claro<small>El exceso normal solo se frena; se bloquea a partir de 3 veces el límite de conexiones nuevas (o 20 intentos/min en SSH).</small></span></label>
+                            <label class="check"><input type="radio" name="ban_mode" value="strict" {{ $banMode === 'strict' ? 'checked' : '' }}>
+                                <span><b>Estricta</b> — bloquea al primer exceso<small>Máxima dureza; puede bloquear a jugadores legítimos que comparten IP (colegios, cibers, móviles).</small></span></label>
+                        </div>
+                        <div class="card-f"><button class="btn btn-primary" type="submit">Guardar política</button></div>
+                    </form>
+                </div>
+
+                <div class="col-2">
+                    <form action="{{ route('admin.extensions.antiddos.intel.update') }}" method="POST" class="card">
+                        @csrf
+                        @method('PATCH')
+                        <div class="card-h"><h3>Origen y reputación de IPs</h3>
+                            <span class="pill {{ $settings['intel_enabled'] ? 'ok' : 'warn' }}">{{ $settings['intel_enabled'] ? 'Activado' : 'Desactivado' }}</span></div>
+                        <div class="card-b">
+                            <label class="check"><input type="checkbox" name="intel_enabled" value="1" {{ $settings['intel_enabled'] ? 'checked' : '' }}>
+                                <span>Consultar el origen y la reputación de las IPs
+                                    <small>País, ciudad, proveedor y ASN (ipwho.is / ipapi.co) y listas públicas de atacantes (Blocklist.de, Spamhaus DROP, FireHOL Level 1, CINS Army, nodos Tor). Solo se envía la IP, nunca datos de jugadores. Si lo desactivas no se consulta nada.</small></span></label>
+                            <div class="f" style="margin-top:12px;">
+                                <label for="abuseipdb_key">Clave de AbuseIPDB (opcional)</label>
+                                <input class="form-control" type="password" id="abuseipdb_key" name="abuseipdb_key" autocomplete="off" placeholder="{{ $abuseKeySet ? '•••••••• guardada (escribe otra para cambiarla)' : 'Pega aquí tu clave gratuita' }}">
+                                <small>Añade el índice de abuso de AbuseIPDB (1.000 consultas gratis al día en abuseipdb.com). Se guarda cifrada con la clave del panel.</small>
+                                @if ($abuseKeySet)<label class="check"><input type="checkbox" name="abuseipdb_clear" value="1"><span>Borrar la clave guardada</span></label>@endif
+                            </div>
+                        </div>
+                        <div class="card-f"><button class="btn btn-primary" type="submit">Guardar</button></div>
+                    </form>
+
+                    <div class="card">
+                        <div class="card-h"><h3>Listas públicas de reputación</h3>
+                            <form action="{{ route('admin.extensions.antiddos.intel.refresh') }}" method="POST" style="display:inline;">@csrf<button class="btn btn-sm btn-default" type="submit">Actualizar ahora</button></form></div>
+                        <div class="tw">
+                            <table class="table">
+                                <thead><tr><th>Lista</th><th>Entradas</th><th>Actualizada</th></tr></thead>
+                                <tbody>
+                                @foreach ($intelStatus as $list)
+                                    <tr>
+                                        <td>{{ $list['name'] }}</td>
+                                        <td>{{ $list['loaded'] ? number_format($list['count'], 0, ',', '.') : '—' }}</td>
+                                        <td>@if ($list['loaded'])<span class="muted">{{ \Illuminate\Support\Carbon::createFromTimestamp($list['updated_at'])->diffForHumans() }}</span>@else<span class="pill warn">Sin descargar</span>@endif</td>
+                                    </tr>
+                                @endforeach
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="card-f small muted">Se actualizan solas cada día a las 05:15 (hace falta el cron de Pterodactyl). También desde consola: <code>sudo antiddos ip 203.0.113.7</code> muestra el análisis completo de una IP.</div>
+                    </div>
+                </div>
+            </div>
+
             <form action="{{ route('admin.extensions.antiddos.settings.update') }}" method="POST" class="card">
                 @csrf
                 @method('PATCH')
@@ -406,12 +473,37 @@
             </div>
 
             <div class="card">
-                <div class="card-h"><h3>Mayores conexiones ahora (por IP externa)</h3><span class="muted small">Hacia los puertos protegidos · se actualiza cada ~30 s</span></div>
+                <div class="card-h">
+                    <h3>Quién se está conectando</h3>
+                    <span class="muted small">Mayores conexiones por IP externa hacia tus puertos protegidos · origen y reputación de listas públicas</span>
+                </div>
+                <div class="tw">
+                    <table class="table" id="ad-top-table">
+                        <thead><tr><th>Origen</th><th>IP</th><th>Red / proveedor</th><th>Conexiones</th><th>Veredicto</th><th style="width:1%;"></th></tr></thead>
+                        <tbody id="ad-top"><tr><td colspan="6" class="muted">Cargando…</td></tr></tbody>
+                    </table>
+                </div>
+                <div class="card-f small muted">
+                    «Normal» = sin listados en bases de atacantes y red de operador/residencial (parece un jugador): <b>no la bloquees</b>.
+                    «Sospechosa» = servidor/VPN/Tor o abuso moderado. «Maliciosa» = aparece en listas públicas de atacantes: bloquearla es seguro.
+                    Las IPs de tus nodos, del panel, de Cloudflare, la lista blanca y la tuya <b>nunca se pueden bloquear</b>.
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-h">
+                    <h3>Bloqueos activos del firewall</h3>
+                    <span class="muted small">IPs que el firewall de los nodos ha bloqueado por su cuenta · política: <b id="ad-banmode">—</b></span>
+                </div>
                 <div class="tw">
                     <table class="table">
-                        <thead><tr><th>IP</th><th>Conexiones</th><th style="width:1%;"></th></tr></thead>
-                        <tbody id="ad-top"><tr><td colspan="3" class="muted">Cargando…</td></tr></tbody>
+                        <thead><tr><th>Origen</th><th>IP</th><th>Motivo del bloqueo</th><th>Queda</th><th>Veredicto</th><th style="width:1%;"></th></tr></thead>
+                        <tbody id="ad-fwbans"><tr><td colspan="6" class="muted">Cargando…</td></tr></tbody>
                     </table>
+                </div>
+                <div class="card-f small muted">
+                    Si una IP «Normal» aparece aquí, probablemente es un falso positivo (por ejemplo muchos jugadores tras una misma red): pulsa <b>«Es legítima»</b> para añadirla a la lista blanca y desbloquearla.
+                    Si ves muchos falsos positivos, pon la política en <b>Equilibrada</b> u <b>Observación</b> en la pestaña Protección.
                 </div>
             </div>
         </div>
@@ -675,6 +767,7 @@
                 var URL_TRAFFIC = @json(route('admin.extensions.antiddos.traffic'));
                 var URL_BLOCK = @json(route('admin.extensions.antiddos.blocks.store'));
                 var CSRF = @json(csrf_token());
+                var URL_WL = @json(route('admin.extensions.antiddos.whitelist.add'));
 
                 var PS = { ps: ['por segundo', 1], pm: ['por minuto', 60] };
                 var VIEWS = {
@@ -694,7 +787,7 @@
                         note: 'Por qué el firewall frena paquetes, apilado: la altura total es todo lo frenado. Si domina «IP bloqueada», los atacantes ya estaban baneados; si domina «Límite de conexiones nuevas», hay un SYN flood en curso.'
                     }
                 };
-                var state = { view: 'network', range: 'live', host: '', data: null, smooth: 1, scale: 'lin', paused: false, vis: {}, units: {}, loadedAt: 0, tried: 0, loading: false, failing: false };
+                var state = { view: 'network', range: 'live', host: '', data: null, smooth: 1, scale: 'lin', paused: false, vis: {}, units: {}, loadedAt: 0, tried: 0, loading: false, failing: false, open: {}, topSig: '', fwSig: '' };
                 Object.keys(VIEWS).forEach(function (n) { state.units[n] = VIEWS[n].unit; state.vis[n] = {}; VIEWS[n].series.forEach(function (x) { state.vis[n][x[0]] = true; }); });
 
                 function V() { return VIEWS[state.view]; }
@@ -764,29 +857,109 @@
                     $('#ad-note').textContent = V().note;
                 }
 
+                var TYPES = { residential: 'Operador / residencial', hosting: 'Servidor o hosting (probable)', vpn: 'VPN o proxy (probable)', unknown: '—' };
+                var WHY = { syn: 'Flood de conexiones nuevas', ssh: 'Fuerza bruta contra SSH', manual: 'Bloqueo manual' };
+                var VCLASS = { malicious: 'error', suspicious: 'warn', clean: 'ok' };
+
+                function el(tag, cls, text) { var e = document.createElement(tag); if (cls) { e.className = cls; } if (text !== undefined) { e.textContent = text; } return e; }
+                function post(url, fields) {
+                    var f = document.createElement('form'); f.method = 'POST'; f.action = url; f.style.display = 'none';
+                    Object.keys(fields).concat(['_token']).forEach(function (k) {
+                        var i = document.createElement('input'); i.type = 'hidden'; i.name = k; i.value = k === '_token' ? CSRF : fields[k]; f.appendChild(i);
+                    });
+                    document.body.appendChild(f); f.submit();
+                }
+                function originCell(row) {
+                    var it = row.intel || {}, td = el('td', 'origin');
+                    if (it.status === 'pending') { td.appendChild(el('span', 'muted', 'Consultando…')); return td; }
+                    if (it.status === 'disabled') { td.appendChild(el('span', 'muted', 'Consulta desactivada')); return td; }
+                    if (it.status === 'internal') { td.appendChild(el('span', 'muted', 'Red interna')); return td; }
+                    var place = [it.city, it.country].filter(Boolean).join(', ');
+                    td.appendChild(document.createTextNode((it.flag ? it.flag + ' ' : '') + (place || 'Origen desconocido')));
+                    return td;
+                }
+                function verdictCell(row) {
+                    var it = row.intel || {}, td = el('td');
+                    var p = el('span', 'pill ' + (VCLASS[it.verdict] || ''), it.verdict_text || '—');
+                    if (it.reasons && it.reasons.length) { p.title = it.reasons.join('\n'); }
+                    td.appendChild(p);
+                    if (it.abuse !== null && it.abuse !== undefined) { td.appendChild(el('div', 'muted small', 'AbuseIPDB ' + it.abuse + ' %')); }
+                    return td;
+                }
+                function detailRow(row, cols) {
+                    var it = row.intel || {}, tr = el('tr', 'det'), td = el('td'); td.colSpan = cols;
+                    var ul = el('ul');
+                    (it.reasons || ['Sin información adicional.']).forEach(function (r) { ul.appendChild(el('li', '', r)); });
+                    td.appendChild(ul);
+                    var facts = [];
+                    if (it.org) { facts.push('Proveedor: ' + it.org + (it.asn ? ' (' + it.asn + ')' : '')); }
+                    if (it.region) { facts.push('Región: ' + it.region); }
+                    if (it.lists && it.lists.length) { facts.push('Listas: ' + it.lists.join(', ')); }
+                    if (it.checked_at) { facts.push('Consultado: ' + new Date(it.checked_at * 1000).toLocaleString('es-ES')); }
+                    if (facts.length) { td.appendChild(el('div', 'muted', facts.join(' · '))); }
+                    tr.appendChild(td); return tr;
+                }
+                function toggle(ip) { state.open[ip] = !state.open[ip]; state.topSig = ''; state.fwSig = ''; renderTop(); renderFwBans(); }
+
                 function renderTop() {
                     var tb = $('#ad-top'), top = (state.data && state.data.top) || [];
-                    if (!top.length) { tb.innerHTML = '<tr><td colspan="3" class="muted">Ninguna IP externa con conexiones hacia tus puertos protegidos en este momento.</td></tr>'; return; }
+                    var sig = JSON.stringify(top) + JSON.stringify(state.open);
+                    if (sig === state.topSig) { return; } state.topSig = sig;
                     tb.innerHTML = '';
+                    if (!top.length) { tb.innerHTML = '<tr><td colspan="6" class="muted">Ninguna IP externa con conexiones hacia tus puertos protegidos en este momento.</td></tr>'; return; }
                     top.forEach(function (row) {
-                        var tr = document.createElement('tr');
-                        tr.innerHTML = '<td><code></code></td><td></td><td style="white-space:nowrap;"></td>';
-                        tr.querySelector('code').textContent = row.ip; tr.children[1].textContent = row.conns;
-                        var cell = tr.children[2];
-                        if (row.blocked) { cell.innerHTML = '<span class="pill error">Bloqueada</span>'; }
+                        var it = row.intel || {}, tr = el('tr');
+                        tr.appendChild(originCell(row));
+                        var tdIp = el('td'); var code = el('code', '', row.ip); tdIp.appendChild(code);
+                        tdIp.appendChild(document.createTextNode(' ')); var more = el('span', 'link small', state.open[row.ip] ? 'ocultar' : 'detalles'); more.addEventListener('click', function () { toggle(row.ip); }); tdIp.appendChild(more);
+                        tr.appendChild(tdIp);
+                        var tdNet = el('td', 'net'); tdNet.appendChild(document.createTextNode(it.org || '—'));
+                        if (it.asn || it.type) { tdNet.appendChild(el('small', '', [it.asn, TYPES[it.type] && it.type !== 'unknown' ? TYPES[it.type] : ''].filter(Boolean).join(' · '))); }
+                        tr.appendChild(tdNet);
+                        tr.appendChild(el('td', '', String(row.conns)));
+                        tr.appendChild(verdictCell(row));
+                        var act = el('td'); act.style.whiteSpace = 'nowrap';
+                        if (row.blocked) { act.appendChild(el('span', 'pill error', 'Bloqueada')); }
+                        else if (row.safe_reason) { var s1 = el('span', 'pill ok', 'Protegida'); s1.title = row.safe_reason; act.appendChild(s1); }
                         else {
-                            var b = document.createElement('button'); b.type = 'button'; b.className = 'btn btn-xs btn-danger'; b.textContent = 'Bloquear 1 h';
+                            var mal = it.verdict === 'malicious', minutes = mal ? 1440 : 60;
+                            var b = el('button', 'btn btn-xs btn-' + (mal ? 'danger' : 'default'), mal ? 'Bloquear 24 h' : 'Bloquear 1 h'); b.type = 'button';
                             b.addEventListener('click', function () {
-                                if (!confirm('¿Bloquear ' + row.ip + ' durante 1 hora en el panel y en todos los nodos?')) { return; }
-                                var f = document.createElement('form'); f.method = 'POST'; f.action = URL_BLOCK; f.style.display = 'none';
-                                [['_token', CSRF], ['ip', row.ip], ['minutes', '60'], ['reason', 'Muchas conexiones (gráfica de tráfico)']].forEach(function (p) {
-                                    var i = document.createElement('input'); i.type = 'hidden'; i.name = p[0]; i.value = p[1]; f.appendChild(i);
-                                });
-                                document.body.appendChild(f); f.submit();
+                                var msg = it.verdict === 'clean'
+                                    ? 'Esta IP parece un jugador normal (sin listados y red de operador/residencial). ¿Seguro que quieres bloquear ' + row.ip + '?'
+                                    : '¿Bloquear ' + row.ip + ' durante ' + (mal ? '24 horas' : '1 hora') + ' en el panel y en todos los nodos?';
+                                if (confirm(msg)) { post(URL_BLOCK, { ip: row.ip, minutes: String(minutes), reason: 'Gráfica de tráfico · veredicto: ' + (it.verdict_text || 'sin datos') }); }
                             });
-                            cell.appendChild(b);
+                            act.appendChild(b);
                         }
-                        tb.appendChild(tr);
+                        tr.appendChild(act); tb.appendChild(tr);
+                        if (state.open[row.ip]) { tb.appendChild(detailRow(row, 6)); }
+                    });
+                }
+
+                function renderFwBans() {
+                    var tb = $('#ad-fwbans'), list = (state.data && state.data.fw_bans) || [];
+                    var mode = state.data && state.data.ban_mode; $('#ad-banmode').textContent = { monitor: 'Observación (nunca bloquea)', balanced: 'Equilibrada', strict: 'Estricta' }[mode] || '—';
+                    // La cuenta atras no obliga a repintar: la firma ignora el tiempo restante.
+                    var sig = JSON.stringify(list.map(function (b) { return [b.ip, b.why, b.intel && b.intel.verdict, b.safe_reason]; })) + JSON.stringify(state.open);
+                    if (sig === state.fwSig) { return; } state.fwSig = sig;
+                    tb.innerHTML = '';
+                    if (!list.length) { tb.innerHTML = '<tr><td colspan="6" class="muted">El firewall no tiene ninguna IP bloqueada ahora mismo.</td></tr>'; return; }
+                    list.forEach(function (b) {
+                        var it = b.intel || {}, tr = el('tr'); tr.appendChild(originCell(b));
+                        var tdIp = el('td'); tdIp.appendChild(el('code', '', b.ip)); tdIp.appendChild(document.createTextNode(' '));
+                        var more = el('span', 'link small', state.open[b.ip] ? 'ocultar' : 'detalles'); more.addEventListener('click', function () { toggle(b.ip); }); tdIp.appendChild(more); tr.appendChild(tdIp);
+                        tr.appendChild(el('td', '', WHY[b.why] || b.why));
+                        tr.appendChild(el('td', '', b.left ? Math.floor(b.left / 60) + ' min' : 'sin caducidad'));
+                        tr.appendChild(verdictCell(b));
+                        var act = el('td'); act.style.whiteSpace = 'nowrap';
+                        var w = el('button', 'btn btn-xs btn-' + (it.verdict === 'malicious' ? 'default' : 'success'), 'Es legítima'); w.type = 'button';
+                        w.title = 'Añadir a la lista blanca y desbloquear';
+                        w.addEventListener('click', function () {
+                            if (confirm('¿Añadir ' + b.ip + ' a la lista blanca y desbloquearla? No se volverá a bloquear.')) { post(URL_WL, { ip: b.ip }); }
+                        });
+                        act.appendChild(w); tr.appendChild(act); tb.appendChild(tr);
+                        if (state.open[b.ip]) { tb.appendChild(detailRow(b, 6)); }
                     });
                 }
 
@@ -909,7 +1082,7 @@
                     el.innerHTML = html;
                 }
 
-                function render() { renderStats(); renderLegend(); renderTop(); messages(); draw(); live(); }
+                function render() { renderStats(); renderLegend(); renderTop(); renderFwBans(); messages(); draw(); live(); }
 
                 function load() {
                     if (state.loading) { return; }

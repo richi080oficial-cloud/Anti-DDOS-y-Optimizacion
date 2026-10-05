@@ -65,6 +65,8 @@ class AgentRegistry
             'rx_pkts' => $int($data['rx_pkts'] ?? 0),
             'tx_bytes' => $int($data['tx_bytes'] ?? 0),
             'tx_pkts' => $int($data['tx_pkts'] ?? 0),
+            'ban_mode' => in_array($data['ban_mode'] ?? '', ['monitor', 'balanced', 'strict'], true) ? $data['ban_mode'] : 'balanced',
+            'fw_bans' => $this->fwBans($data['fw_bans'] ?? []),
             'top_ips' => $this->topIps($data['top_ips'] ?? []),
         ];
 
@@ -142,5 +144,27 @@ class AgentRegistry
         }
 
         return array_slice($out, 0, 10);
+    }
+
+    /**
+     * Bloqueos locales activos del firewall, con motivo y tiempo restante.
+     *
+     * @param mixed $list
+     * @return array<int, array{ip: string, left: int, why: string}>
+     */
+    protected function fwBans(mixed $list): array
+    {
+        $out = [];
+
+        foreach (is_array($list) ? $list : [] as $row) {
+            $ip = is_array($row) ? ($row['ip'] ?? null) : null;
+            $why = is_array($row) ? ($row['why'] ?? '') : '';
+
+            if (is_string($ip) && filter_var($ip, FILTER_VALIDATE_IP) !== false && in_array($why, ['syn', 'ssh', 'manual'], true)) {
+                $out[] = ['ip' => $ip, 'left' => max(0, (int) ($row['left'] ?? 0)), 'why' => $why];
+            }
+        }
+
+        return array_slice($out, 0, 30);
     }
 }

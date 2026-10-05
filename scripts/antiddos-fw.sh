@@ -59,6 +59,7 @@ load_conf() {
     STATIC_WHITELIST="127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
     EXTRA_WHITELIST=""       # IPs/CIDR adicionales separados por espacio
     NET_IFACE=""             # interfaz publica para RX/TX (vacio = la de la ruta por defecto)
+    BAN_MODE="balanced"      # monitor = nunca bloquea IPs (solo frena el exceso) | balanced = bloquea solo ante floods claros | strict = bloquea al primer exceso
 
     # shellcheck disable=SC1090
     [[ -f "$CONF" ]] && . "$CONF"
@@ -121,6 +122,9 @@ create_sets() {
     ipset create -exist vs_feed       hash:net
     # timeout 0 = por defecto sin caducidad; cada alta indica su propio timeout.
     ipset create -exist vs_ban        hash:ip timeout 0 maxelem 524288
+    # Un set por motivo, para poder decir exactamente por que esta bloqueada cada IP.
+    ipset create -exist vs_ban_ssh    hash:ip timeout 0 maxelem 65536
+    ipset create -exist vs_ban_man    hash:ip timeout 0 maxelem 65536
 }
 
 load_whitelist() {
@@ -147,7 +151,7 @@ remove_rules() {
     while ipt -t raw    -D PREROUTING -j ANTIDDOS   2>/dev/null; do :; done
     while ipt -t mangle -D PREROUTING -j ANTIDDOS_M 2>/dev/null; do :; done
     local spec
-    for spec in "raw ANTIDDOS" "raw VS_SYNFLOOD" "raw ANTIDDOS_CTCP" "raw ANTIDDOS_CUDP" "raw ANTIDDOS_CSYN" \
+    for spec in "raw ANTIDDOS" "raw VS_SYNFLOOD" "raw VS_SSHBAN" "raw ANTIDDOS_D_SLIM" "raw ANTIDDOS_CTCP" "raw ANTIDDOS_CUDP" "raw ANTIDDOS_CSYN" \
                  "raw ANTIDDOS_D_BAN" "raw ANTIDDOS_D_MAL" "raw ANTIDDOS_D_ICMP" "raw ANTIDDOS_D_UDP" "raw ANTIDDOS_D_WEB" "mangle ANTIDDOS_M"; do
         # shellcheck disable=SC2086
         set -- $spec
@@ -161,6 +165,7 @@ apply_rules() {
     remove_rules
 
     ipt -t raw -N VS_SYNFLOOD
+    ipt -t raw -N VS_SSHBAN
     # Cadenas vacias: solo sirven para contar paquetes (graficas del panel).
     ipt -t raw -N ANTIDDOS_CTCP
     ipt -t raw -N ANTIDDOS_CUDP
@@ -171,15 +176,19 @@ apply_rules() {
     # Una cadena por MOTIVO de descarte (cada una solo hace DROP): asi el panel
     # puede decir exactamente por que se frena el trafico (grafica «Motivos»).
     local reason
-    for reason in BAN MAL ICMP UDP WEB; do
+    for reason in BAN MAL ICMP UDP WEB SLIM; do
         ipt -t raw -N "ANTIDDOS_D_${reason}"
         ipt -t raw -A "ANTIDDOS_D_${reason}" -j DROP
     done
 
     # Sub-cadena: registra (limitado), bloquea la IP y descarta el paquete.
-    ipt -t raw -A VS_SYNFLOOD -m limit --limit 6/min --limit-burst 3 -j LOG --log-prefix "ANTIDDOS ban " --log-level 4
+    ipt -t raw -A VS_SYNFLOOD -m limit --limit 6/min --limit-burst 3 -j LOG --log-prefix "ANTIDDOS ban syn " --log-level 4
     ipt -t raw -A VS_SYNFLOOD -j SET --add-set vs_ban src --exist --timeout "$BAN_SECONDS"
     ipt -t raw -A VS_SYNFLOOD -j DROP
+    # Fuerza bruta SSH: set aparte (motivo distinto).
+    ipt -t raw -A VS_SSHBAN -m limit --limit 6/min --limit-burst 3 -j LOG --log-prefix "ANTIDDOS ban ssh " --log-level 4
+    ipt -t raw -A VS_SSHBAN -j SET --add-set vs_ban_ssh src --exist --timeout "$BAN_SECONDS"
+    ipt -t raw -A VS_SSHBAN -j DROP
 
     local R=(ipt -t raw -A ANTIDDOS)
 
@@ -187,6 +196,8 @@ apply_rules() {
     "${R[@]}" -m set --match-set vs_white_feed src -j RETURN
     "${R[@]}" -m set --match-set vs_feed src       -j ANTIDDOS_D_BAN
     "${R[@]}" -m set --match-set vs_ban src        -j ANTIDDOS_D_BAN
+    "${R[@]}" -m set --match-set vs_ban_ssh src    -j ANTIDDOS_D_BAN
+    "${R[@]}" -m set --match-set vs_ban_man src    -j ANTIDDOS_D_BAN
 
     # Paquetes malformados / escaneos clasicos.
     "${R[@]}" -f -j ANTIDDOS_D_MAL
@@ -214,20 +225,45 @@ apply_rules() {
         "${R[@]}" -p udp -m multiport --dports "$UDP_PORTS" -j ANTIDDOS_CUDP
     fi
 
-    # SYN flood por IP hacia los puertos protegidos (bloquea al atacante).
+    # Politica de bloqueo (BAN_MODE):
+    #   monitor  -> NUNCA se bloquea una IP: solo se frena el exceso de paquetes.
+    #   balanced -> el exceso se frena y solo se bloquea ante un flood claro (3 veces el limite).
+    #   strict   -> se bloquea al primer exceso del limite.
+    local ban_rate="$SYN_RATE" ban_burst="$SYN_BURST" ssh_rate="6/minute" ssh_burst=8
+    if [[ "$BAN_MODE" != "strict" ]]; then
+        ban_rate=$(( SYN_RATE * 3 )); ban_burst=$(( SYN_BURST * 3 )); ssh_rate="20/minute"; ssh_burst=20
+    fi
+
+    # Conexiones nuevas por IP hacia los puertos protegidos.
     if [[ -n "$TCP_PORTS" ]]; then
-        "${R[@]}" -p tcp --syn -m multiport --dports "$TCP_PORTS" \
-            -m hashlimit --hashlimit-name vs_syn --hashlimit-mode srcip \
-            --hashlimit-above "${SYN_RATE}/second" --hashlimit-burst "$SYN_BURST" \
-            -j VS_SYNFLOOD
+        if [[ "$BAN_MODE" != "monitor" ]]; then
+            "${R[@]}" -p tcp --syn -m multiport --dports "$TCP_PORTS" \
+                -m hashlimit --hashlimit-name vs_synban --hashlimit-mode srcip \
+                --hashlimit-above "${ban_rate}/second" --hashlimit-burst "$ban_burst" \
+                -j VS_SYNFLOOD
+        fi
+        if [[ "$BAN_MODE" != "strict" ]]; then
+            "${R[@]}" -p tcp --syn -m multiport --dports "$TCP_PORTS" \
+                -m hashlimit --hashlimit-name vs_syn --hashlimit-mode srcip \
+                --hashlimit-above "${SYN_RATE}/second" --hashlimit-burst "$SYN_BURST" \
+                -j ANTIDDOS_D_SLIM
+        fi
     fi
 
     # Fuerza bruta contra SSH.
     if [[ -n "$SSH_PORT" ]]; then
-        "${R[@]}" -p tcp --syn --dport "$SSH_PORT" \
-            -m hashlimit --hashlimit-name vs_ssh --hashlimit-mode srcip \
-            --hashlimit-above 6/minute --hashlimit-burst 8 \
-            -j VS_SYNFLOOD
+        if [[ "$BAN_MODE" != "monitor" ]]; then
+            "${R[@]}" -p tcp --syn --dport "$SSH_PORT" \
+                -m hashlimit --hashlimit-name vs_sshban --hashlimit-mode srcip \
+                --hashlimit-above "$ssh_rate" --hashlimit-burst "$ssh_burst" \
+                -j VS_SSHBAN
+        fi
+        if [[ "$BAN_MODE" != "strict" ]]; then
+            "${R[@]}" -p tcp --syn --dport "$SSH_PORT" \
+                -m hashlimit --hashlimit-name vs_ssh --hashlimit-mode srcip \
+                --hashlimit-above 6/minute --hashlimit-burst 8 \
+                -j ANTIDDOS_D_SLIM
+        fi
     fi
 
     # Web del panel (opcional): solo descarta, no bloquea, por si hay proxy delante.
@@ -328,6 +364,7 @@ apply_remote_setting() {
         TCP_PORTS|UDP_PORTS) re='^[0-9:,]*$' ;;
         CONN_LIMIT|SYN_RATE|UDP_RATE|BAN_SECONDS) re='^[0-9]+$' ;;
         ATTACK_MODE) re='^[01]$' ;;
+        BAN_MODE) re='^(monitor|balanced|strict)$' ;;
         *) return 0 ;;
     esac
     [[ "$val" == "-" ]] && val=""
@@ -371,6 +408,23 @@ sync_feed() {
 # ── Informe de estado al panel ────────────────────────────────────────────────
 json_arr() { local out="" x; for x in "$@"; do out+="${out:+,}\"${x}\""; done; echo "[${out}]"; }
 
+count_bans() {
+    local n=0 x
+    for x in vs_ban vs_ban_ssh vs_ban_man; do n=$(( n + $(count_set "$x" || echo 0) + 0 )); done
+    echo "$n"
+}
+
+# Bloqueos locales activos con motivo y segundos restantes (JSON, maximo 30).
+fw_bans_json() {
+    local pair set why
+    {
+        for pair in "vs_ban:syn" "vs_ban_ssh:ssh" "vs_ban_man:manual"; do
+            set="${pair%%:*}"; why="${pair##*:}"
+            ipset list "$set" 2>/dev/null | awk -v why="$why" '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/ { print $1, ($3 == "" ? 0 : $3), why }'
+        done
+    } | head -30 | awk 'BEGIN { printf "[" } { printf "%s{\"ip\":\"%s\",\"left\":%d,\"why\":\"%s\"}", (NR > 1 ? "," : ""), $1, $2, $3 } END { print "]" }'
+}
+
 count_set() { ipset list "$1" 2>/dev/null | awk '/^Number of entries:/ {print $4}' | head -1; }
 
 dropped_packets() {
@@ -378,9 +432,9 @@ dropped_packets() {
 }
 
 build_heartbeat() {
-    local active=false mode=http ips bl bp c top net
+    local active=false mode=http ips bl bp c top net fwb
     c="$(read_counters)"; net="$(read_net)"
-    bl="$(count_set vs_ban)"; bp="$(count_set vs_feed)"; top="$(top_ips_json)"
+    bl="$(count_bans)"; bp="$(count_set vs_feed)"; top="$(top_ips_json)"; fwb="$(fw_bans_json)"
     ipt -t raw -L ANTIDDOS -n >/dev/null 2>&1 && active=true
     panel_is_local && mode=local
     # shellcheck disable=SC2046
@@ -388,10 +442,10 @@ build_heartbeat() {
     # shellcheck disable=SC2086
     set -- $c
     local dropped=$(( ${6:-0} + ${7:-0} + ${8:-0} + ${9:-0} + ${10:-0} + ${11:-0} + ${12:-0} ))
-    printf '{"host":"%s","ips":%s,"version":"%s","active":%s,"mode":"%s","tcp":"%s","udp":"%s","attack":%s,"conn_limit":%s,"syn_rate":%s,"udp_rate":%s,"ban_seconds":%s,"bans_local":%s,"bans_panel":%s,"dropped":%s,"tcp_pkts":%s,"udp_pkts":%s,"syn":%s,"tcp_bytes":%s,"udp_bytes":%s,"drop_bytes":%s,"d_ban":%s,"d_mal":%s,"d_icmp":%s,"d_syn":%s,"d_udp":%s,"d_conn":%s,"d_web":%s,"rx_bytes":%s,"rx_pkts":%s,"tx_bytes":%s,"tx_pkts":%s,"top_ips":%s}' \
+    printf '{"host":"%s","ips":%s,"version":"%s","active":%s,"mode":"%s","tcp":"%s","udp":"%s","attack":%s,"conn_limit":%s,"syn_rate":%s,"udp_rate":%s,"ban_seconds":%s,"bans_local":%s,"bans_panel":%s,"dropped":%s,"tcp_pkts":%s,"udp_pkts":%s,"syn":%s,"tcp_bytes":%s,"udp_bytes":%s,"drop_bytes":%s,"d_ban":%s,"d_mal":%s,"d_icmp":%s,"d_syn":%s,"d_udp":%s,"d_conn":%s,"d_web":%s,"rx_bytes":%s,"rx_pkts":%s,"tx_bytes":%s,"tx_pkts":%s,"ban_mode":"%s","fw_bans":%s,"top_ips":%s}' \
         "$(hostname)" "$ips" "$AGENT_VERSION" "$active" "$mode" "$TCP_PORTS" "$UDP_PORTS" "${ATTACK_MODE:-0}" \
         "$CONN_LIMIT" "$SYN_RATE" "$UDP_RATE" "$BAN_SECONDS" "${bl:-0}" "${bp:-0}" "$dropped" \
-        "${1:-0}" "${2:-0}" "${3:-0}" "${4:-0}" "${5:-0}" "${13:-0}" "${6:-0}" "${7:-0}" "${8:-0}" "${9:-0}" "${10:-0}" "${11:-0}" "${12:-0}" $net "$top"
+        "${1:-0}" "${2:-0}" "${3:-0}" "${4:-0}" "${5:-0}" "${13:-0}" "${6:-0}" "${7:-0}" "${8:-0}" "${9:-0}" "${10:-0}" "${11:-0}" "${12:-0}" $net "$BAN_MODE" "$fwb" "$top"
 }
 
 send_heartbeat() {
@@ -435,7 +489,7 @@ read_counters() {
             if (chain == "ANTIDDOS_D_ICMP") { dicmp += $1; dbytes += $2 }
             if (chain == "ANTIDDOS_D_UDP")  { dudp  += $1; dbytes += $2 }
             if (chain == "ANTIDDOS_D_WEB")  { dweb  += $1; dbytes += $2 }
-            if (chain == "VS_SYNFLOOD")     { dsyn  += $1; dbytes += $2 }
+            if (chain == "VS_SYNFLOOD" || chain == "VS_SSHBAN" || chain == "ANTIDDOS_D_SLIM") { dsyn += $1; dbytes += $2 }
         }
         END { printf "%d %d %d %d %d %d %d %d %d %d %d %d %d\n", tcp, udp, syn, tcpb, udpb, dban, dmal, dicmp, dsyn, dudp, dconn, dweb, dbytes }' <<<"$raw"
 }
@@ -503,7 +557,7 @@ cmd_watch() {
         line="$(read_counters)"
         net="$(read_net "$dev")"
         (( loops % 60 == 0 )) && dev="$(net_iface)"
-        bans_now="$(( $(ipset list -t vs_ban 2>/dev/null | awk '/^Number of entries:/ {print $4}') + 0 ))"
+        bans_now="$(count_bans)"
         echo "${ts} ${line} ${net} ${bans_now}" >> "$LIVE_RING"
 
         # El archivo se recorta cada 60 vueltas (no en cada una, para gastar poco);
@@ -568,7 +622,7 @@ cmd_remove() {
     have iptables && remove_rules
     if have ipset; then
         local s
-        for s in vs_white vs_white_feed vs_feed vs_ban vs_feed_tmp vs_white_feed_tmp; do
+        for s in vs_white vs_white_feed vs_feed vs_ban vs_ban_ssh vs_ban_man vs_feed_tmp vs_white_feed_tmp; do
             ipset destroy "$s" 2>/dev/null || true
         done
     fi
@@ -589,11 +643,12 @@ cmd_status() {
     echo "  Puertos UDP     : ${UDP_PORTS:-—}"
     echo "  Puerto web      : ${WEB_PORTS:-sin límite}"
     echo "  Modo ataque     : $([[ $ATTACK_MODE == 1 ]] && echo SÍ || echo no)"
+    echo "  Política bloqueo: ${BAN_MODE} (monitor = nunca bloquea · balanced = solo floods claros · strict = al primer exceso)"
     echo "  Límites         : conn=${CONN_LIMIT}/IP  syn=${SYN_RATE}/s (ráfaga ${SYN_BURST})  udp=${UDP_RATE}/s  ban=${BAN_SECONDS}s"
     echo "  Panel (sync)    : ${PANEL_URL:-no configurado}"
     if have ipset; then
         local s n
-        for s in vs_ban vs_feed vs_white vs_white_feed; do
+        for s in vs_ban vs_ban_ssh vs_ban_man vs_feed vs_white vs_white_feed; do
             n="$(ipset list "$s" 2>/dev/null | awk '/^Number of entries:/ {print $4}')"
             printf '  %-15s : %s entradas\n' "$s" "${n:-—}"
         done
@@ -633,7 +688,7 @@ cmd_ban() {
     valid_ipv4 "$ip" || fail "IP no válida (solo IPv4): '${ip}'"
     [[ "$secs" =~ ^[0-9]+$ ]] || fail "Duración no válida: '${secs}' (segundos; 0 = permanente)"
     create_sets
-    ipset add -exist vs_ban "$ip" timeout "$secs"
+    ipset add -exist vs_ban_man "$ip" timeout "$secs"
     ok "Bloqueada ${ip} durante $([[ $secs == 0 ]] && echo 'siempre' || echo "${secs}s")."
     log "ban ${ip} ${secs}s (manual)"
 }
@@ -642,14 +697,19 @@ cmd_unban() {
     require_root; require_tools
     local ip="${1:-}"
     valid_ipv4 "$ip" || fail "IP no válida (solo IPv4): '${ip}'"
-    ipset del vs_ban "$ip" 2>/dev/null && ok "Desbloqueada ${ip}." || warn "${ip} no estaba bloqueada localmente."
+    local removed=1 x
+    for x in vs_ban vs_ban_ssh vs_ban_man; do ipset del "$x" "$ip" 2>/dev/null && removed=0; done
+    [[ $removed == 0 ]] && ok "Desbloqueada ${ip}." || warn "${ip} no estaba bloqueada localmente."
     log "unban ${ip}"
 }
 
 cmd_bans() {
     require_root; require_tools
     echo "Bloqueos locales (con tiempo restante):"
-    ipset list vs_ban 2>/dev/null | awk '/^[0-9]+\./ {printf "  %-16s %s s\n", $1, ($3=="" ? "∞" : $3)}'
+    local pair
+    for pair in "vs_ban:flood de conexiones" "vs_ban_ssh:fuerza bruta SSH" "vs_ban_man:manual"; do
+        ipset list "${pair%%:*}" 2>/dev/null | awk -v why="${pair#*:}" '/^[0-9]+\./ {printf "  %-16s %-8s %s\n", $1, ($3=="" ? "∞" : $3 " s"), why}'
+    done
     echo
     echo "Bloqueos recibidos del panel: $(ipset list vs_feed 2>/dev/null | awk '/^Number of entries:/ {print $4}')"
 }
@@ -660,7 +720,7 @@ cmd_white_add() {
     valid_ipv4 "$ip" || fail "IP/CIDR no válida (solo IPv4): '${ip}'"
     mkdir -p "$(dirname "$WHITELIST_FILE")"
     grep -qxF "$ip" "$WHITELIST_FILE" 2>/dev/null || echo "$ip" >> "$WHITELIST_FILE"
-    have ipset && { create_sets; ipset add -exist vs_white "$ip"; ipset del vs_ban "$ip" 2>/dev/null; }
+    have ipset && { create_sets; ipset add -exist vs_white "$ip"; ipset del vs_ban "$ip" 2>/dev/null; ipset del vs_ban_ssh "$ip" 2>/dev/null; ipset del vs_ban_man "$ip" 2>/dev/null; }
     ok "${ip} añadida a la lista blanca."
 }
 
@@ -692,7 +752,7 @@ cmd_attack() {
 
 set_conf() {
     local key="$1" value="$2"
-    [[ "$key" =~ ^(TCP_PORTS|UDP_PORTS|WEB_PORTS|SSH_PORT|CONN_LIMIT|SYN_RATE|SYN_BURST|UDP_RATE|UDP_BURST|ICMP_RATE|BAN_SECONDS|ATTACK_MODE|SYSCTL|PANEL_URL|PANEL_DIR|API_KEY|EXTRA_WHITELIST|NET_IFACE)$ ]] \
+    [[ "$key" =~ ^(TCP_PORTS|UDP_PORTS|WEB_PORTS|SSH_PORT|CONN_LIMIT|SYN_RATE|SYN_BURST|UDP_RATE|UDP_BURST|ICMP_RATE|BAN_SECONDS|ATTACK_MODE|SYSCTL|PANEL_URL|PANEL_DIR|API_KEY|EXTRA_WHITELIST|NET_IFACE|BAN_MODE)$ ]] \
         || fail "Clave desconocida: ${key}"
     [[ "$value" =~ ^[A-Za-z0-9:,./_\ -]*$ ]] || fail "Valor con caracteres no permitidos."
     mkdir -p "$(dirname "$CONF")"

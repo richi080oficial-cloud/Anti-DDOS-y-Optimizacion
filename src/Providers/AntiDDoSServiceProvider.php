@@ -59,6 +59,7 @@ class AntiDDoSServiceProvider extends ServiceProvider
         // scheduler del panel (el cron "schedule:run" que ya exige Pterodactyl).
         $this->callAfterResolving(Schedule::class, function (Schedule $schedule) {
             $schedule->command('antiddos:manage prune')->dailyAt('04:30')->withoutOverlapping();
+            $schedule->command('antiddos:manage refresh-lists')->dailyAt('05:15')->withoutOverlapping();
         });
     }
 }

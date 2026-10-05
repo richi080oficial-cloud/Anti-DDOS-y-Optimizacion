@@ -72,8 +72,13 @@ class BlockManager
     /**
      * Bloquea una IP. $minutes = null -> permanente.
      */
-    public function block(string $ip, ?int $minutes, ?string $reason = null, string $source = 'manual', ?int $userId = null): ShieldBlock
+    public function block(string $ip, ?int $minutes, ?string $reason = null, string $source = 'manual', ?int $userId = null, ?string $requestIp = null): ShieldBlock
     {
+        // Red de seguridad contra falsos positivos: ciertas IPs no se pueden bloquear nunca.
+        if (($why = app(SafeIps::class)->protectedReason($ip, $requestIp)) !== null) {
+            throw new \DomainException($why);
+        }
+
         $existing = ShieldBlock::query()->where('ip', $ip)->first();
 
         $block = $existing ?? new ShieldBlock(['ip' => $ip]);
@@ -177,7 +182,10 @@ class BlockManager
             $lines[] = 'B ' . $block->ip;
         }
 
-        foreach (IpMatcher::parseList((string) ShieldSetting::read('whitelist', '')) as $rule) {
+        $whitelist = IpMatcher::parseList((string) ShieldSetting::read('whitelist', ''));
+
+        // Los nodos, los agentes y el propio panel nunca se bloquean (aunque no esten en la lista blanca).
+        foreach (array_unique(array_merge($whitelist, app(SafeIps::class)->infrastructure())) as $rule) {
             $lines[] = 'W ' . $rule;
         }
 
@@ -186,7 +194,7 @@ class BlockManager
         $map = [
             'fw_tcp_ports' => 'TCP_PORTS', 'fw_udp_ports' => 'UDP_PORTS', 'fw_conn_limit' => 'CONN_LIMIT',
             'fw_syn_rate' => 'SYN_RATE', 'fw_udp_rate' => 'UDP_RATE', 'fw_ban_seconds' => 'BAN_SECONDS',
-            'fw_attack_mode' => 'ATTACK_MODE',
+            'fw_attack_mode' => 'ATTACK_MODE', 'fw_ban_mode' => 'BAN_MODE',
         ];
 
         // Con el firewall gestionado y la deteccion activa, los puertos que se envian
@@ -213,7 +221,7 @@ class BlockManager
                 continue;
             }
 
-            if ($value !== '' && preg_match('/^[0-9:,-]+$/', $value)) {
+            if ($value !== '' && preg_match('/^([0-9:,-]+|monitor|balanced|strict)$/', $value)) {
                 $lines[] = "C {$agentKey} {$value}";
             }
         }

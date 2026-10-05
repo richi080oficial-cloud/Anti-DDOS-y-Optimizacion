@@ -29,6 +29,12 @@ Route::middleware(['web', 'auth', AdminAuthenticate::class])
 
         Route::post('/apikey', [AdminController::class, 'rotateKey'])->name('apikey');
 
+        // Origen y reputacion de IPs, politica de bloqueo y correccion de falsos positivos.
+        Route::patch('/intel', [AdminController::class, 'updateIntel'])->name('intel.update');
+        Route::post('/intel/refresh', [AdminController::class, 'refreshLists'])->middleware('throttle:6,1')->name('intel.refresh');
+        Route::patch('/policy', [AdminController::class, 'updatePolicy'])->name('policy.update');
+        Route::post('/whitelist', [AdminController::class, 'whitelistIp'])->middleware('throttle:30,1')->name('whitelist.add');
+
         // Graficas de trafico (JSON para el dibujado en el navegador).
         Route::get('/traffic', [AdminController::class, 'trafficData'])->middleware('throttle:300,1')->name('traffic');
 

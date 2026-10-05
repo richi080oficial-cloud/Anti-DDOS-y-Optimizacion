@@ -9,6 +9,7 @@ use Pterodactyl\Extensions\AntiDDoS\Models\ShieldSetting;
 use Pterodactyl\Extensions\AntiDDoS\Services\BlockManager;
 use Pterodactyl\Extensions\AntiDDoS\Services\IpMatcher;
 use Pterodactyl\Extensions\AntiDDoS\Services\RateCounter;
+use Pterodactyl\Extensions\AntiDDoS\Services\SafeIps;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -65,7 +66,7 @@ class ShieldGuard
 
         // Una IP de Cloudflare no es la del visitante (falta TRUSTED_PROXIES): bloquearla
         // cortaria el acceso a TODOS los usuarios que pasan por ese nodo de Cloudflare.
-        if (IpMatcher::isInternal($ip) || IpMatcher::isCloudflare($ip) || IpMatcher::inList($ip, IpMatcher::parseList((string) $settings['whitelist']))) {
+        if (IpMatcher::isInternal($ip) || IpMatcher::isCloudflare($ip) || app(SafeIps::class)->isInfrastructure($ip) || IpMatcher::inList($ip, IpMatcher::parseList((string) $settings['whitelist']))) {
             return null;
         }
 

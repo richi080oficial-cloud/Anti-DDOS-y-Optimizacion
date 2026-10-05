@@ -10,12 +10,15 @@ use Pterodactyl\Extensions\AntiDDoS\Models\ShieldEvent;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldSetting;
 use Pterodactyl\Extensions\AntiDDoS\Services\AgentRegistry;
 use Pterodactyl\Extensions\AntiDDoS\Services\BlockManager;
+use Pterodactyl\Extensions\AntiDDoS\Services\IpIntel;
 use Pterodactyl\Extensions\AntiDDoS\Services\IpMatcher;
+use Pterodactyl\Extensions\AntiDDoS\Services\ReputationLists;
+use Pterodactyl\Extensions\AntiDDoS\Services\SafeIps;
 
 class ShieldCommand extends Command
 {
     protected $signature = 'antiddos:manage
-                            {action=info : info | apikey | purge | prune | feed | ban | unban | bans | whitelist}
+                            {action=info : info | ip | refresh-lists | apikey | purge | prune | feed | ban | unban | bans | whitelist}
                             {args?* : Argumentos de la accion (IP, add|del|list)}
                             {--key= : Clave concreta a usar con la accion apikey}
                             {--if-missing : Con apikey, no hace nada si ya existe una clave}
@@ -50,6 +53,8 @@ class ShieldCommand extends Command
             'apikey' => $this->apiKey(),
             'purge' => $this->purge(),
             'prune' => $this->prune($blocks),
+            'ip' => $this->ip($args),
+            'refresh-lists' => $this->refreshLists(),
             'feed' => $this->feed($blocks),
             'heartbeat' => $this->heartbeat(),
             'ban' => $this->ban($blocks, $args),
@@ -139,6 +144,56 @@ class ShieldCommand extends Command
         return self::SUCCESS;
     }
 
+    /** Origen y reputacion de una IP (consulta completa, sin cache). */
+    protected function ip(array $args): int
+    {
+        $ip = (string) ($args[0] ?? '');
+
+        if (filter_var($ip, FILTER_VALIDATE_IP) === false) {
+            $this->error('Uso: antiddos ip 203.0.113.7');
+
+            return self::FAILURE;
+        }
+
+        if (!app(ReputationLists::class)->anyLoaded()) {
+            $this->line('<comment>Las listas de reputación no están descargadas; se descargan ahora…</comment>');
+            $this->refreshLists();
+        }
+
+        $intel = app(IpIntel::class)->lookup($ip, true);
+        $why = app(SafeIps::class)->protectedReason($ip);
+
+        $this->table(['Campo', 'Valor'], [
+            ['IP', $ip],
+            ['Veredicto', ($intel['verdict_text'] ?? '—')],
+            ['País', trim(($intel['flag'] ?? '') . ' ' . ($intel['country'] ?? '—'))],
+            ['Ciudad / región', trim(($intel['city'] ?? '—') . ' · ' . ($intel['region'] ?? ''))],
+            ['Proveedor (ASN)', trim(($intel['org'] ?? '—') . ' ' . ($intel['asn'] ?? ''))],
+            ['Tipo de red', (string) ($intel['type'] ?? '—')],
+            ['Listas de atacantes', ($intel['lists'] ?? []) ? implode(', ', $intel['lists']) : 'ninguna'],
+            ['AbuseIPDB', isset($intel['abuse']) && $intel['abuse'] !== null ? $intel['abuse'] . ' %' : 'no configurado'],
+            ['¿Se puede bloquear?', $why ?? 'sí'],
+        ]);
+
+        foreach ((array) ($intel['reasons'] ?? []) as $reason) {
+            $this->line(' · ' . $reason);
+        }
+
+        return self::SUCCESS;
+    }
+
+    protected function refreshLists(): int
+    {
+        $this->line('Descargando listas públicas de reputación…');
+
+        foreach (app(ReputationLists::class)->refresh() as $id => $r) {
+            $name = ReputationLists::SOURCES[$id][0];
+            $this->line($r['ok'] ? "  <info>✓</info> {$name}: {$r['count']} entradas" : "  <comment>!</comment> {$name}: {$r['error']}");
+        }
+
+        return self::SUCCESS;
+    }
+
     /** Latido del agente de nodo local (mismo efecto que POST /api/antiddos/heartbeat). */
     protected function heartbeat(): int
     {
@@ -175,7 +230,14 @@ class ShieldCommand extends Command
         $minutes = $this->option('minutes');
         $minutes = ($minutes === null || $minutes === '' || (int) $minutes === 0) ? null : (int) $minutes;
 
-        $blocks->block($ip, $minutes, (string) ($this->option('reason') ?: 'Bloqueo manual (CLI)'), 'manual');
+        try {
+            $blocks->block($ip, $minutes, (string) ($this->option('reason') ?: 'Bloqueo manual (CLI)'), 'manual');
+        } catch (\DomainException $e) {
+            $this->error('No se bloquea: ' . $e->getMessage());
+
+            return self::FAILURE;
+        }
+
         $this->info("IP {$ip} bloqueada " . ($minutes === null ? 'permanentemente' : "{$minutes} minutos") . '.');
 
         return self::SUCCESS;

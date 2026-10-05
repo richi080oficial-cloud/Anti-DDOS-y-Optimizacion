@@ -51,6 +51,12 @@ return [
         'fw_auto' => true,          // proteger los puertos de los servidores de Minecraft
         'fw_extra_ports' => true,   // ...incluidas sus asignaciones adicionales (Dynmap, voice chat...)
         'fw_egg_ids' => '',         // eggs que cuentan como Minecraft (vacio = deteccion por nombre)
+
+        // Politica de bloqueo de IPs en los nodos: monitor | balanced | strict ('' = la del nodo).
+        'fw_ban_mode' => '',
+
+        // Origen y reputacion de IPs (consulta a servicios publicos; solo se envia la IP).
+        'intel_enabled' => true,
     ],
 
     // Rutas que NUNCA se cuentan ni se bloquean (patrones de Request::is()).

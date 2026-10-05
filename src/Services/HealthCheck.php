@@ -56,6 +56,16 @@ class HealthCheck
             default => $this->item('cache', 'Caché del panel', 'ok', "Driver «{$cache}»: correcto para contar peticiones."),
         };
 
+        if (!empty($settings['intel_enabled'])) {
+            $loaded = collect(app(ReputationLists::class)->status())->where('loaded', true)->count();
+            $total = count(ReputationLists::SOURCES);
+            $checks[] = match (true) {
+                $loaded === $total => $this->item('rep', 'Reputación de IPs', 'ok', "Las {$total} listas públicas de atacantes están descargadas."),
+                $loaded > 0 => $this->item('rep', 'Reputación de IPs', 'warn', "Solo {$loaded} de {$total} listas descargadas (alguna no respondió).", 'Pulsa «Actualizar ahora» en Protección → Listas públicas de reputación.'),
+                default => $this->item('rep', 'Reputación de IPs', 'warn', 'Las listas públicas de atacantes aún no se han descargado: no se pueden valorar las IPs.', 'Se descargan solas al abrir Tráfico; o pulsa «Actualizar ahora» en Protección.'),
+            };
+        }
+
         if ($requestIp !== null) {
             $checks[] = IpMatcher::isCloudflare($requestIp)
                 ? $this->item('ip', 'IP real de los visitantes', 'error', "El panel ve una IP de Cloudflare ({$requestIp}) en vez de la IP real del visitante. Hasta que se configure, el escudo web NO actúa (por seguridad se desactiva solo para no bloquear a todos los usuarios de ese nodo de Cloudflare).", 'Añade en el .env del panel: TRUSTED_PROXIES con los rangos de https://www.cloudflare.com/ips-v4 y ejecuta: php artisan config:clear')

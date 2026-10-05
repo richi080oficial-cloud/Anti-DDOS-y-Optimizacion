@@ -6,6 +6,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
@@ -15,12 +16,15 @@ use Pterodactyl\Extensions\AntiDDoS\Models\ShieldEvent;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldSetting;
 use Pterodactyl\Extensions\AntiDDoS\Services\BlockManager;
 use Pterodactyl\Extensions\AntiDDoS\Services\HealthCheck;
+use Pterodactyl\Extensions\AntiDDoS\Services\IpIntel;
 use Pterodactyl\Extensions\AntiDDoS\Services\IpMatcher;
 use Pterodactyl\Extensions\AntiDDoS\Services\LiveTraffic;
 use Pterodactyl\Extensions\AntiDDoS\Services\MetricsService;
 use Pterodactyl\Extensions\AntiDDoS\Services\MinecraftPorts;
 use Pterodactyl\Extensions\AntiDDoS\Services\PortAdvisor;
 use Pterodactyl\Extensions\AntiDDoS\Services\PortChanger;
+use Pterodactyl\Extensions\AntiDDoS\Services\ReputationLists;
+use Pterodactyl\Extensions\AntiDDoS\Services\SafeIps;
 use Pterodactyl\Extensions\AntiDDoS\Services\TrafficEngine;
 use Pterodactyl\Models\Allocation;
 use Pterodactyl\Models\Server;
@@ -34,6 +38,9 @@ class AdminController extends Controller
         protected PortChanger $changer,
         protected MetricsService $metrics,
         protected LiveTraffic $live,
+        protected IpIntel $intel,
+        protected SafeIps $safe,
+        protected ReputationLists $reputation,
     ) {
     }
 
@@ -55,6 +62,11 @@ class AdminController extends Controller
             'mc' => ['plan' => $plan = $this->minecraft->plan(), 'eggs' => $this->minecraft->eggs()],
             'ports' => $this->portRows($fw = $this->firewallValues($settings, $health['agents']), $plan),
             'metricsHosts' => $health['agents']->pluck('host')->all(),
+            'intelStatus' => $this->reputation->status(),
+            'intelRefreshedAt' => Cache::get('antiddos:rep:refreshed'),
+            'abuseKeySet' => $this->intel->abuseKey() !== null,
+            'banMode' => (string) (($settings['fw_ban_mode'] ?? '') ?: ($health['agents']->first(fn ($a) => $a->isOnline())?->payload['ban_mode'] ?? 'balanced')),
+            'banModeManaged' => (string) ($settings['fw_ban_mode'] ?? '') !== '',
             'settings' => $settings,
             'blocks' => $this->blocks->active(),
             'events' => ShieldEvent::query()->orderByDesc('id')->limit(150)->get(),
@@ -247,17 +259,20 @@ class AdminController extends Controller
             ? $this->live->series($host, $view)
             : $this->metrics->series($range, $host, $view);
 
-        $response['top'] = $this->topIps($host);
+        $response['top'] = $this->topIps($host, $request->ip());
+        $response['fw_bans'] = $this->firewallBans($host, $request->ip());
+        $response['ban_mode'] = (string) (ShieldSetting::read('fw_ban_mode', '') ?: 'balanced');
 
         return (new JsonResponse($response))->header('Cache-Control', 'no-store');
     }
 
     /**
-     * IPs con mas conexiones ahora (de los agentes), sumando nodos y marcando las ya bloqueadas.
+     * IPs con mas conexiones ahora (de los agentes), sumando nodos, con su origen y
+     * veredicto de reputacion (de la cache: nunca espera a servicios externos).
      *
-     * @return array<int, array{ip: string, conns: int, blocked: bool}>
+     * @return array<int, array<string, mixed>>
      */
-    protected function topIps(?string $host): array
+    protected function topIps(?string $host, ?string $requestIp = null): array
     {
         $totals = [];
 
@@ -276,7 +291,46 @@ class AdminController extends Controller
         $out = [];
 
         foreach (array_slice($totals, 0, 10, true) as $ip => $conns) {
-            $out[] = ['ip' => (string) $ip, 'conns' => $conns, 'blocked' => array_key_exists($ip, $blocked)];
+            $ip = (string) $ip;
+            $out[] = [
+                'ip' => $ip,
+                'conns' => $conns,
+                'blocked' => array_key_exists($ip, $blocked),
+                'safe_reason' => $this->safe->protectedReason($ip, $requestIp),
+                'intel' => $this->intel->peek($ip),
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * Bloqueos activos del firewall de los nodos, con motivo, tiempo restante y veredicto.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    protected function firewallBans(?string $host, ?string $requestIp = null): array
+    {
+        $rows = [];
+
+        foreach (ShieldAgent::query()->when($host, fn ($q) => $q->where('host', $host))->get() as $agent) {
+            foreach ((array) ($agent->payload['fw_bans'] ?? []) as $b) {
+                $key = $b['ip'];
+
+                if (!isset($rows[$key]) || $b['left'] > $rows[$key]['left']) {
+                    $rows[$key] = $b + ['host' => $agent->host];
+                }
+            }
+        }
+
+        uasort($rows, fn (array $a, array $b) => $b['left'] <=> $a['left']);
+        $out = [];
+
+        foreach (array_slice($rows, 0, 30) as $b) {
+            $out[] = $b + [
+                'safe_reason' => $this->safe->protectedReason($b['ip'], $requestIp),
+                'intel' => $this->intel->peek($b['ip']),
+            ];
         }
 
         return $out;
@@ -448,21 +502,81 @@ class AdminController extends Controller
             'reason' => 'nullable|string|max:200',
         ]);
 
-        if ($data['ip'] === $request->ip()) {
-            return $this->tab('blocks')
-                ->with('antiddos:error', 'No puedes bloquear tu propia IP.');
+        try {
+            $this->blocks->block(
+                $data['ip'],
+                isset($data['minutes']) ? (int) $data['minutes'] : null,
+                $data['reason'] ?? 'Bloqueo manual',
+                'manual',
+                $request->user()?->id,
+                $request->ip()
+            );
+        } catch (\DomainException $e) {
+            return $this->tab('blocks')->with('antiddos:error', "No se bloquea {$data['ip']}: " . $e->getMessage());
         }
-
-        $this->blocks->block(
-            $data['ip'],
-            isset($data['minutes']) ? (int) $data['minutes'] : null,
-            $data['reason'] ?? 'Bloqueo manual',
-            'manual',
-            $request->user()?->id
-        );
 
         return $this->tab('blocks')
             ->with('antiddos:success', "IP {$data['ip']} bloqueada. Los nodos la recibirán en menos de un minuto.");
+    }
+
+    /** Añade una IP a la lista blanca (y la desbloquea): para corregir un falso positivo. */
+    public function whitelistIp(Request $request): RedirectResponse
+    {
+        $data = $request->validate(['ip' => 'required|ip']);
+
+        $list = IpMatcher::parseList((string) ShieldSetting::read('whitelist', ''));
+
+        if (!in_array($data['ip'], $list, true)) {
+            $list[] = $data['ip'];
+            ShieldSetting::write(['whitelist' => implode("\n", $list)]);
+        }
+
+        $this->blocks->unblock($data['ip']);
+        $this->safe->forget();
+        ShieldEvent::record('whitelist', "IP {$data['ip']} añadida a la lista blanca (falso positivo corregido)", $data['ip'], ['user_id' => $request->user()?->id]);
+
+        return $this->tab('status')->with('antiddos:success', "{$data['ip']} añadida a la lista blanca: ya no se bloqueará (se aplica a los nodos en menos de un minuto).");
+    }
+
+    /** Politica de bloqueo de los nodos: monitor | balanced | strict. */
+    public function updatePolicy(Request $request): RedirectResponse
+    {
+        $data = $request->validate(['ban_mode' => 'required|in:monitor,balanced,strict']);
+
+        ShieldSetting::write(['fw_ban_mode' => $data['ban_mode']]);
+        ShieldEvent::record('settings', 'Política de bloqueo de los nodos: ' . $data['ban_mode'], $request->ip(), ['user_id' => $request->user()?->id]);
+
+        return $this->tab('shield')->with('antiddos:success', 'Política de bloqueo guardada. Los nodos la aplican en menos de un minuto.');
+    }
+
+    /** Consulta de origen y reputacion: activar/desactivar y clave opcional de AbuseIPDB. */
+    public function updateIntel(Request $request): RedirectResponse
+    {
+        $request->validate(['abuseipdb_key' => 'nullable|string|max:200']);
+
+        ShieldSetting::write(['intel_enabled' => $request->boolean('intel_enabled')]);
+
+        if ($request->boolean('abuseipdb_clear')) {
+            $this->intel->setAbuseKey(null);
+        } elseif (trim((string) $request->input('abuseipdb_key')) !== '') {
+            $this->intel->setAbuseKey(trim((string) $request->input('abuseipdb_key')));
+        }
+
+        return $this->tab('shield')->with('antiddos:success', 'Configuración de origen y reputación guardada.');
+    }
+
+    /** Descarga ya las listas publicas de reputacion. */
+    public function refreshLists(): RedirectResponse
+    {
+        @set_time_limit(120);
+
+        $results = $this->reputation->refresh();
+        $ok = collect($results)->where('ok', true)->count();
+
+        return $this->tab('shield')->with(
+            $ok > 0 ? 'antiddos:success' : 'antiddos:error',
+            sprintf('Listas de reputación actualizadas: %d de %d descargadas%s.', $ok, count($results), $ok < count($results) ? ' (las que fallaron conservan la copia anterior)' : '')
+        );
     }
 
     public function unban(Request $request): RedirectResponse
