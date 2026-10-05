@@ -5,7 +5,7 @@
 @endsection
 
 @section('content-header')
-    <h1>Anti-DDoS y Optimización <small>anti-DDoS y optimización · v{{ $version }}</small></h1>
+    <h1>Anti-DDoS y Optimización <small>v{{ $version }}</small></h1>
     <ol class="breadcrumb">
         <li><a href="{{ route('admin.index') }}">Admin</a></li>
         <li class="active">Anti-DDoS y Optimización</li>
@@ -13,272 +13,174 @@
 @endsection
 
 @section('content')
+    @php
+        $matchedIds = collect($health['nodes'])->pluck('agent.id')->filter()->all();
+        $otherAgents = $health['agents']->reject(fn ($a) => in_array($a->id, $matchedIds, true));
+        $installCmd = 'bash <(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/Anti-DDOS-y-Optimizacion/main/install.sh) node-install --tcp=' . ($fw['tcp'] ?: '25565') . ' --panel-url=' . ($panelUrl ?: 'https://tu-panel') . ' --key=' . (session('antiddos:newkey') ?: 'TU_CLAVE');
+    @endphp
+
     <style>
-        /* Sin colores de fondo propios: heredan el tema activo (claro, oscuro o de terceros). */
-        .vs-admin, .vs-admin * { box-sizing: border-box; }
-        .vs-admin { width: 100%; max-width: 100%; clear: both; }
-        .vs-admin .vs-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 15px; padding: 0; list-style: none; border-bottom: 1px solid rgba(127,127,127,.3); }
-        .vs-admin .vs-tabs a { display: block; padding: 9px 14px; cursor: pointer; color: inherit; opacity: .75; border-bottom: 3px solid transparent; text-decoration: none; }
-        .vs-admin .vs-tabs a:hover { opacity: 1; }
-        .vs-admin .vs-tabs a.active { opacity: 1; font-weight: 600; border-bottom-color: #3c8dbc; }
-        .vs-admin .vs-pane { display: none; }
-        .vs-admin .vs-pane.active { display: block; }
-        .vs-admin .box { background: transparent; box-shadow: none; border: 1px solid rgba(127,127,127,.28); border-top-width: 3px; border-radius: 4px; color: inherit; }
-        .vs-admin .box-header, .vs-admin .box-body, .vs-admin .box-footer { background: transparent; color: inherit; }
-        .vs-admin .box-header.with-border, .vs-admin .box-footer { border-color: rgba(127,127,127,.25); }
-        .vs-admin .box.box-primary { border-top-color: #3c8dbc; }
-        .vs-admin .box.box-success { border-top-color: #00a65a; }
-        .vs-admin .box.box-warning { border-top-color: #f39c12; }
-        .vs-admin .box.box-danger  { border-top-color: #dd4b39; }
-        .vs-admin .text-muted { color: inherit; opacity: .7; }
-        .vs-admin code, .vs-admin pre { background: rgba(127,127,127,.15); color: inherit; border: 0; border-radius: 3px; }
-        .vs-admin pre { padding: 10px 12px; white-space: pre-wrap; word-break: break-all; position: relative; margin: 6px 0 12px; }
-        .vs-admin .vs-copy { position: absolute; top: 6px; right: 6px; }
-        .vs-admin .vs-grid { display: flex; flex-wrap: wrap; gap: 15px; margin-bottom: 15px; }
-        .vs-admin .vs-col { flex: 1 1 280px; min-width: 0; }
-        .vs-admin .vs-col-2 { flex: 2 1 420px; min-width: 0; }
-        .vs-admin .vs-stat { text-align: center; padding: 12px 8px; }
-        .vs-admin .vs-stat .n { font-size: 30px; font-weight: 600; line-height: 1.1; }
-        .vs-admin .vs-field { margin-bottom: 12px; }
-        .vs-admin .vs-field label { display: block; font-weight: 600; margin-bottom: 3px; }
-        .vs-admin .vs-field small { display: block; opacity: .7; margin-top: 2px; }
-        .vs-admin .vs-check { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-weight: normal; cursor: pointer; }
-        .vs-admin .vs-check input { margin: 0; }
-        .vs-admin .vs-profiles { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
-        .vs-admin .vs-profile { flex: 1 1 220px; border: 1px solid rgba(127,127,127,.35); border-radius: 4px; padding: 10px 12px; cursor: pointer; display: block; font-weight: normal; }
-        .vs-admin .vs-profile input { margin-right: 6px; }
-        .vs-admin .vs-profile.selected { border-color: #3c8dbc; box-shadow: 0 0 0 1px #3c8dbc; }
-        .vs-admin .vs-profile b { display: block; margin-bottom: 3px; }
-        .vs-admin .table { color: inherit; background: transparent; }
-        .vs-admin .table > thead > tr > th, .vs-admin .table > tbody > tr > td { border-color: rgba(127,127,127,.2); vertical-align: middle; }
-        .vs-admin .table-wrap { overflow-x: auto; }
-        .vs-admin .vs-report td:nth-child(2) { width: 60px; }
-        .vs-admin .alert { color: inherit; background: rgba(127,127,127,.12); border: 1px solid rgba(127,127,127,.35); border-left-width: 4px; }
-        .vs-admin .alert-success { border-left-color: #00a65a; }
-        .vs-admin .alert-danger { border-left-color: #dd4b39; }
-        .vs-admin .alert-warning { border-left-color: #f39c12; }
+        /* Sin colores de fondo fijos: hereda el tema activo (claro, oscuro o de terceros). */
+        .ad, .ad * { box-sizing: border-box; }
+        .ad { width: 100%; max-width: 100%; clear: both; --ok: #00a65a; --warn: #f39c12; --err: #dd4b39; --pri: #3c8dbc; --line: rgba(127,127,127,.28); }
+        .ad .card { border: 1px solid var(--line); border-radius: 6px; margin-bottom: 16px; }
+        .ad .card-h { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+        .ad .card-h h3 { margin: 0; font-size: 16px; font-weight: 600; }
+        .ad .card-b { padding: 16px; }
+        .ad .card-f { padding: 12px 16px; border-top: 1px solid var(--line); }
+        .ad .muted { opacity: .7; }
+        .ad .small { font-size: 12px; }
+        .ad code, .ad pre { background: rgba(127,127,127,.15); color: inherit; border: 0; border-radius: 3px; }
+        .ad pre { padding: 10px 12px; margin: 8px 0; white-space: pre-wrap; word-break: break-all; }
+        .ad pre .copy { margin-left: 8px; }
+        .ad .hero { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; padding: 18px 20px; border-left: 6px solid var(--line); }
+        .ad .hero.ok { border-left-color: var(--ok); } .ad .hero.warn { border-left-color: var(--warn); } .ad .hero.error { border-left-color: var(--err); }
+        .ad .hero .ico { font-size: 34px; line-height: 1; }
+        .ad .hero .txt { flex: 1 1 280px; min-width: 0; }
+        .ad .hero .txt h2 { margin: 0 0 4px; font-size: 20px; }
+        .ad .tabs { display: flex; flex-wrap: wrap; gap: 2px; margin: 0 0 16px; padding: 0; list-style: none; border-bottom: 1px solid var(--line); }
+        .ad .tabs a { display: block; padding: 10px 16px; cursor: pointer; color: inherit; opacity: .7; border-bottom: 3px solid transparent; text-decoration: none; }
+        .ad .tabs a:hover { opacity: 1; } .ad .tabs a.active { opacity: 1; font-weight: 600; border-bottom-color: var(--pri); }
+        .ad .pane { display: none; } .ad .pane.active { display: block; }
+        .ad .grid { display: flex; flex-wrap: wrap; gap: 16px; }
+        .ad .col { flex: 1 1 320px; min-width: 0; } .ad .col-2 { flex: 2 1 480px; min-width: 0; }
+        .ad .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 0; background: var(--line); flex: 0 0 10px; }
+        .ad .dot.ok { background: var(--ok); } .ad .dot.warn { background: var(--warn); } .ad .dot.error { background: var(--err); }
+        .ad .row-i { display: flex; gap: 10px; padding: 11px 0; border-bottom: 1px solid var(--line); align-items: flex-start; }
+        .ad .row-i:last-child { border-bottom: 0; }
+        .ad .row-i .dot { margin-top: 6px; }
+        .ad .row-i .body { flex: 1; min-width: 0; }
+        .ad .row-i .body b { display: block; }
+        .ad .fix { margin-top: 5px; }
+        .ad .pill { display: inline-block; padding: 1px 9px; border-radius: 10px; font-size: 12px; border: 1px solid var(--line); }
+        .ad .pill.ok { color: var(--ok); border-color: var(--ok); } .ad .pill.warn { color: var(--warn); border-color: var(--warn); } .ad .pill.error { color: var(--err); border-color: var(--err); }
+        .ad .f { margin-bottom: 14px; } .ad .f label { display: block; font-weight: 600; margin-bottom: 3px; } .ad .f small { display: block; opacity: .7; margin-top: 3px; }
+        .ad .f-row { display: flex; flex-wrap: wrap; gap: 14px; } .ad .f-row .f { flex: 1 1 180px; min-width: 0; }
+        .ad .check { display: flex; align-items: flex-start; gap: 9px; margin: 8px 0; font-weight: normal; cursor: pointer; }
+        .ad .check input { margin: 3px 0 0; } .ad .check span small { display: block; opacity: .7; }
+        .ad .profiles { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 8px; }
+        .ad .profile { flex: 1 1 230px; border: 2px solid var(--line); border-radius: 6px; padding: 12px 14px; cursor: pointer; display: block; font-weight: normal; margin: 0; }
+        .ad .profile.sel { border-color: var(--pri); box-shadow: 0 0 0 1px var(--pri); }
+        .ad .profile b { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 15px; }
+        .ad .chips span { display: inline-block; margin: 6px 6px 0 0; padding: 1px 8px; border-radius: 10px; font-size: 12px; background: rgba(127,127,127,.18); }
+        .ad .table { width: 100%; color: inherit; background: transparent; margin: 0; }
+        .ad .table > thead > tr > th, .ad .table > tbody > tr > td { border-color: var(--line); vertical-align: middle; padding: 8px; }
+        .ad .tw { overflow-x: auto; }
+        .ad details { border: 1px solid var(--line); border-radius: 6px; padding: 10px 14px; margin: 12px 0; }
+        .ad details > summary { cursor: pointer; font-weight: 600; }
+        .ad .alert { color: inherit; background: rgba(127,127,127,.12); border: 1px solid var(--line); border-left-width: 5px; border-radius: 4px; padding: 11px 14px; margin-bottom: 14px; }
+        .ad .alert.s { border-left-color: var(--ok); } .ad .alert.e { border-left-color: var(--err); } .ad .alert.w { border-left-color: var(--warn); }
+        .ad .atk { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+        .ad .atk .state { font-weight: 700; font-size: 15px; }
     </style>
 
-    <div class="vs-admin">
-        @if (session('antiddos:success'))
-            <div class="alert alert-success">{{ session('antiddos:success') }}</div>
-        @endif
-        @if (session('antiddos:error'))
-            <div class="alert alert-danger">{{ session('antiddos:error') }}</div>
-        @endif
+    <div class="ad">
+        @if (session('antiddos:success'))<div class="alert s">{{ session('antiddos:success') }}</div>@endif
+        @if (session('antiddos:error'))<div class="alert e">{{ session('antiddos:error') }}</div>@endif
         @if ($errors->any())
-            <div class="alert alert-danger">
-                <ul style="margin:0; padding-left:18px;">
-                    @foreach ($errors->all() as $error)
-                        <li>{{ $error }}</li>
-                    @endforeach
-                </ul>
-            </div>
+            <div class="alert e">@foreach ($errors->all() as $error)<div>{{ $error }}</div>@endforeach</div>
         @endif
         @if (session('antiddos:newkey'))
-            <div class="alert alert-warning">
-                <b>Nueva clave de la API (cópiala ahora, no se vuelve a mostrar):</b>
-                <pre id="vs-newkey" style="margin-top:8px;">{{ session('antiddos:newkey') }}</pre>
-            </div>
+            <div class="alert w"><b>Nueva clave de la API</b> (cópiala ahora, no se vuelve a mostrar):<pre>{{ session('antiddos:newkey') }}</pre></div>
         @endif
 
-        <ul class="vs-tabs" id="vs-tabs">
-            <li><a data-tab="overview">Resumen</a></li>
-            <li><a data-tab="shield">Escudo web</a></li>
+        {{-- ─────────── Cabecera de estado ─────────── --}}
+        <div class="card hero {{ $health['level'] }}">
+            <div class="ico">{{ ['ok' => '🛡️', 'warn' => '⚠️', 'error' => '🔧'][$health['level']] }}</div>
+            <div class="txt">
+                <h2>{{ $health['title'] }}</h2>
+                <div class="muted">{{ $health['text'] }}</div>
+            </div>
+            <div class="atk">
+                <div>
+                    <div class="small muted">Modo «bajo ataque»</div>
+                    <div class="state" style="color: var(--{{ $fw['attack'] ? 'err' : 'ok' }})">{{ $fw['attack'] ? 'ACTIVADO' : 'Desactivado' }}</div>
+                </div>
+                <form action="{{ route('admin.extensions.antiddos.attack') }}" method="POST">
+                    @csrf
+                    <input type="hidden" name="mode" value="{{ $fw['attack'] ? 'off' : 'on' }}">
+                    <button class="btn btn-{{ $fw['attack'] ? 'default' : 'danger' }}" type="submit">{{ $fw['attack'] ? 'Volver a normal' : 'Activar' }}</button>
+                </form>
+            </div>
+        </div>
+
+        <ul class="tabs" id="ad-tabs">
+            <li><a data-tab="status">Estado</a></li>
+            <li><a data-tab="shield">Protección</a></li>
             <li><a data-tab="blocks">Bloqueos ({{ $blocks->count() }})</a></li>
             <li><a data-tab="optimize">Optimización</a></li>
-            <li><a data-tab="nodes">Nodos (anti-DDoS)</a></li>
             <li><a data-tab="events">Eventos</a></li>
         </ul>
 
-        {{-- ───────────────────────── RESUMEN ───────────────────────── --}}
-        <div class="vs-pane" id="pane-overview">
-            <div class="vs-grid">
-                <div class="vs-col box box-{{ $settings['enabled'] ? 'success' : 'danger' }}"><div class="box-body vs-stat">
-                    <div class="n">{{ $settings['enabled'] ? 'ACTIVO' : 'APAGADO' }}</div>
-                    <div class="text-muted">Escudo web del panel</div>
-                </div></div>
-                <div class="vs-col box box-primary"><div class="box-body vs-stat">
-                    <div class="n">{{ $blocks->count() }}</div>
-                    <div class="text-muted">IPs bloqueadas ahora</div>
-                </div></div>
-                <div class="vs-col box box-primary"><div class="box-body vs-stat">
-                    <div class="n">{{ $states->count() }}</div>
-                    <div class="text-muted">Servidores optimizados (de los listados)</div>
-                </div></div>
-                <div class="vs-col box box-{{ $hasApiKey ? 'success' : 'warning' }}"><div class="box-body vs-stat">
-                    <div class="n">{{ $hasApiKey ? 'OK' : 'SIN CLAVE' }}</div>
-                    <div class="text-muted">Clave de la API para los nodos</div>
-                </div></div>
-            </div>
+        {{-- ═══════════════════════ ESTADO ═══════════════════════ --}}
+        <div class="pane" id="pane-status">
+            <div class="grid">
+                <div class="col-2">
+                    <div class="card">
+                        <div class="card-h"><h3>¿Está todo instalado?</h3>
+                            <span class="pill {{ $health['level'] }}">{{ $health['errors'] }} pendiente(s) · {{ $health['warnings'] }} aviso(s)</span></div>
+                        <div class="card-b">
+                            <div class="small muted" style="margin-bottom:6px;">PANEL</div>
+                            @foreach ($health['checks'] as $c)
+                                <div class="row-i">
+                                    <span class="dot {{ $c['level'] }}"></span>
+                                    <div class="body">
+                                        <b>{{ $c['label'] }}</b>
+                                        <span class="muted">{{ $c['detail'] }}</span>
+                                        @if ($c['fix'])<div class="fix"><code>{{ $c['fix'] }}</code></div>@endif
+                                    </div>
+                                </div>
+                            @endforeach
 
-            <div class="vs-grid">
-                <div class="vs-col-2 box box-primary">
-                    <div class="box-header with-border"><h3 class="box-title">Cómo te protege Anti-DDoS y Optimización</h3></div>
-                    <div class="box-body">
-                        <p><b>1. Escudo web (este panel).</b> Limita las peticiones por IP al panel y bloquea a quien se pasa, antes de que la petición llegue a la base de datos. Protege la <i>web</i> contra ataques de capa 7 y fuerza bruta del login.</p>
-                        <p><b>2. Agente de nodo (cada máquina con Wings).</b> Es lo que frena los ataques a los <i>servidores de Minecraft</i>: firewall con iptables/ipset que descarta SYN floods, UDP floods, paquetes malformados y limita las conexiones por IP <u>antes</u> de que consuman CPU. Se instala por consola en cada nodo (pestaña <a href="#nodes" data-goto="nodes">Nodos</a>) y recibe automáticamente los bloqueos de este panel.</p>
-                        <p><b>3. Optimización.</b> Perfiles listos para Minecraft (flags de la JVM, distancias, mobs, redstone…) que se aplican a los servidores con un clic y se pueden revertir.</p>
-                        <p class="text-muted" style="margin-bottom:0;">Ningún software puede frenar un ataque volumétrico que sature el enlace de tu proveedor: para eso necesitas protección anti-DDoS en la red del hosting o un proxy tipo TCPShield/Cloudflare Spectrum. Anti-DDoS y Optimización cubre todo lo que sí se puede parar en la propia máquina.</p>
-                    </div>
-                </div>
-                <div class="vs-col box box-warning">
-                    <div class="box-header with-border"><h3 class="box-title">Lista de comprobación</h3></div>
-                    <div class="box-body">
-                        <p>{{ $settings['enabled'] ? '✅' : '⚠️' }} Escudo web {{ $settings['enabled'] ? 'activo' : 'apagado' }}</p>
-                        <p>{{ $hasApiKey ? '✅' : '⚠️' }} Clave de API {{ $hasApiKey ? 'creada' : 'sin crear (ejecuta: sudo antiddos apikey)' }}</p>
-                        <p>⬜ Agente instalado en cada nodo: <code>sudo antiddos node-install</code></p>
-                        <p>⬜ Panel en otra máquina: añade su IP a la lista blanca de cada nodo</p>
-                        <p style="margin-bottom:0;">⬜ Perfil de optimización aplicado a los servidores</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        {{-- ───────────────────────── ESCUDO WEB ───────────────────────── --}}
-        <div class="vs-pane" id="pane-shield">
-            <form action="{{ route('admin.extensions.antiddos.settings.update') }}" method="POST">
-                @csrf
-                @method('PATCH')
-                <div class="vs-grid">
-                    <div class="vs-col box box-primary">
-                        <div class="box-header with-border"><h3 class="box-title">Límites por IP</h3></div>
-                        <div class="box-body">
-                            <label class="vs-check"><input type="checkbox" name="enabled" value="1" {{ $settings['enabled'] ? 'checked' : '' }}> Escudo web activado</label>
-                            <div class="vs-field">
-                                <label for="general_limit">Peticiones por minuto y por IP</label>
-                                <input class="form-control" type="number" id="general_limit" name="general_limit" min="30" max="100000" value="{{ old('general_limit', $settings['general_limit']) }}">
-                                <small>No cuentan los assets estáticos ni la API de Wings. Un usuario normal hace muy pocas; sube el valor si hay oficinas/colegios con una sola IP pública.</small>
-                            </div>
-                            <div class="vs-field">
-                                <label for="auth_limit">Intentos de login por minuto y por IP</label>
-                                <input class="form-control" type="number" id="auth_limit" name="auth_limit" min="3" max="1000" value="{{ old('auth_limit', $settings['auth_limit']) }}">
-                                <small>Frena la fuerza bruta contra el inicio de sesión.</small>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="vs-col box box-primary">
-                        <div class="box-header with-border"><h3 class="box-title">Bloqueo automático</h3></div>
-                        <div class="box-body">
-                            <div class="vs-field">
-                                <label for="ban_minutes">Duración del primer bloqueo (minutos)</label>
-                                <input class="form-control" type="number" id="ban_minutes" name="ban_minutes" min="1" max="10080" value="{{ old('ban_minutes', $settings['ban_minutes']) }}">
-                            </div>
-                            <div class="vs-field">
-                                <label for="ban_max_minutes">Duración máxima (minutos)</label>
-                                <input class="form-control" type="number" id="ban_max_minutes" name="ban_max_minutes" min="1" max="43200" value="{{ old('ban_max_minutes', $settings['ban_max_minutes']) }}">
-                                <small>Cada reincidencia duplica el bloqueo hasta este máximo.</small>
-                            </div>
-                            <div class="vs-field">
-                                <label for="retention_days">Días que se guardan los eventos</label>
-                                <input class="form-control" type="number" id="retention_days" name="retention_days" min="1" max="365" value="{{ old('retention_days', $settings['retention_days']) }}">
-                            </div>
-                            <label class="vs-check"><input type="checkbox" name="log_events" value="1" {{ $settings['log_events'] ? 'checked' : '' }}> Registrar eventos</label>
-                        </div>
-                    </div>
-                    <div class="vs-col box box-primary">
-                        <div class="box-header with-border"><h3 class="box-title">Lista blanca</h3></div>
-                        <div class="box-body">
-                            <div class="vs-field">
-                                <label for="whitelist">IPs o rangos que nunca se bloquean</label>
-                                <textarea class="form-control" id="whitelist" name="whitelist" rows="6" placeholder="203.0.113.7&#10;198.51.100.0/24">{{ old('whitelist', $settings['whitelist']) }}</textarea>
-                                <small>Una por línea. Se envía también a los nodos. Las IPs privadas y de loopback nunca se bloquean. Tu IP actual: <code>{{ $myIp }}</code></small>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="vs-col box box-primary">
-                        <div class="box-header with-border"><h3 class="box-title">Optimización</h3></div>
-                        <div class="box-body">
-                            <div class="vs-field">
-                                <label for="default_profile">Perfil preseleccionado</label>
-                                <select class="form-control" id="default_profile" name="default_profile">
-                                    @foreach ($profiles as $key => $profile)
-                                        <option value="{{ $key }}" {{ old('default_profile', $settings['default_profile']) === $key ? 'selected' : '' }}>{{ $profile['label'] }}</option>
-                                    @endforeach
-                                </select>
-                            </div>
-                            <div class="vs-field">
-                                <label for="heap_percent">% de la RAM para el heap de Java</label>
-                                <input class="form-control" type="number" id="heap_percent" name="heap_percent" min="60" max="95" value="{{ old('heap_percent', $settings['heap_percent']) }}">
-                                <small>El resto queda para metaspace, hilos y buffers nativos. Con el 100 % Docker mata el contenedor por falta de memoria.</small>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <button type="submit" class="btn btn-primary">Guardar configuración</button>
-            </form>
-        </div>
-
-        {{-- ───────────────────────── BLOQUEOS ───────────────────────── --}}
-        <div class="vs-pane" id="pane-blocks">
-            <div class="vs-grid">
-                <div class="vs-col box box-danger">
-                    <div class="box-header with-border"><h3 class="box-title">Bloquear una IP</h3></div>
-                    <form action="{{ route('admin.extensions.antiddos.blocks.store') }}" method="POST">
-                        @csrf
-                        <div class="box-body">
-                            <div class="vs-field">
-                                <label for="ban-ip">IP</label>
-                                <input class="form-control" id="ban-ip" name="ip" placeholder="203.0.113.7" required>
-                            </div>
-                            <div class="vs-field">
-                                <label for="ban-minutes">Minutos (vacío = permanente)</label>
-                                <input class="form-control" id="ban-minutes" type="number" name="minutes" min="1" placeholder="60">
-                            </div>
-                            <div class="vs-field">
-                                <label for="ban-reason">Motivo</label>
-                                <input class="form-control" id="ban-reason" name="reason" maxlength="200" placeholder="Opcional">
-                            </div>
-                            <small class="text-muted">El bloqueo llega a los nodos en menos de un minuto.</small>
-                        </div>
-                        <div class="box-footer"><button class="btn btn-danger" type="submit">Bloquear</button></div>
-                    </form>
-                </div>
-                <div class="vs-col-2 box box-primary">
-                    <div class="box-header with-border"><h3 class="box-title">IPs bloqueadas</h3></div>
-                    <div class="box-body table-wrap">
-                        <table class="table table-hover">
-                            <thead><tr><th>IP</th><th>Origen</th><th>Caduca</th><th>Reinc.</th><th>Motivo</th><th></th></tr></thead>
-                            <tbody>
-                            @forelse ($blocks as $block)
-                                <tr>
-                                    <td><code>{{ $block->ip }}</code></td>
-                                    <td>{{ $block->source === 'auto' ? 'escudo' : ($block->source === 'manual' ? 'manual' : $block->source) }}</td>
-                                    <td>{{ $block->expires_at ? $block->expires_at->diffForHumans() : 'permanente' }}</td>
-                                    <td>{{ $block->strikes }}</td>
-                                    <td>{{ \Illuminate\Support\Str::limit((string) $block->reason, 60) }}</td>
-                                    <td>
-                                        <form action="{{ route('admin.extensions.antiddos.blocks.destroy') }}" method="POST" style="display:inline;">
-                                            @csrf
-                                            @method('DELETE')
-                                            <input type="hidden" name="ip" value="{{ $block->ip }}">
-                                            <button class="btn btn-xs btn-default" type="submit">Desbloquear</button>
-                                        </form>
-                                    </td>
-                                </tr>
+                            <div class="small muted" style="margin:16px 0 6px;">NODOS (FIREWALL ANTI-DDoS)</div>
+                            @forelse ($health['nodes'] as $n)
+                                <div class="row-i">
+                                    <span class="dot {{ $n['level'] }}"></span>
+                                    <div class="body">
+                                        <b>{{ $n['name'] }} <span class="muted small">{{ $n['fqdn'] }}</span></b>
+                                        <span class="muted">{{ $n['detail'] }}</span>
+                                        @if ($n['fix'])<div class="fix"><code>{{ $n['fix'] }}</code></div>@endif
+                                    </div>
+                                </div>
                             @empty
-                                <tr><td colspan="6" class="text-muted">No hay IPs bloqueadas.</td></tr>
+                                <div class="muted">Este panel no tiene nodos creados todavía.</div>
                             @endforelse
-                            </tbody>
-                        </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col">
+                    <div class="card">
+                        <div class="card-h"><h3>Añadir un nodo</h3></div>
+                        <div class="card-b">
+                            <p class="muted">En cada máquina con Wings que <b>no sea</b> este panel, ejecuta como root:</p>
+                            <pre>{{ $installCmd }}<button type="button" class="btn btn-xs btn-default copy">Copiar</button></pre>
+                            <p class="muted small" style="margin:0;">Si el panel y Wings están en la misma máquina no hace falta: ya se instaló con <code>install-all</code>. La clave se muestra al regenerarla en la pestaña Protección.</p>
+                        </div>
                     </div>
                 </div>
             </div>
-        </div>
 
-        {{-- ───────────────────────── OPTIMIZACIÓN ───────────────────────── --}}
-        <div class="vs-pane" id="pane-optimize">
-            @if (session('antiddos:report'))
-                <div class="box box-primary">
-                    <div class="box-header with-border"><h3 class="box-title">Informe de la última operación</h3></div>
-                    <div class="box-body table-wrap">
-                        <table class="table vs-report">
+            @if ($health['agents']->isNotEmpty())
+                <div class="card">
+                    <div class="card-h"><h3>Agentes conectados</h3><span class="muted small">Se actualizan cada ~30 s</span></div>
+                    <div class="tw">
+                        <table class="table">
+                            <thead><tr><th>Máquina</th><th>Estado</th><th>Puertos TCP</th><th>UDP</th><th>Límite/IP</th><th>Bloqueadas</th><th>Paquetes frenados</th><th>Versión</th><th>Visto</th></tr></thead>
                             <tbody>
-                            @foreach (session('antiddos:report') as [$serverName, $level, $message])
+                            @foreach ($health['agents'] as $a)
+                                @php($p = $a->payload ?? [])
                                 <tr>
-                                    <td>{{ $serverName }}</td>
-                                    <td>{{ $level === 'ok' ? '✅' : ($level === 'warn' ? '⚠️' : '❌') }}</td>
-                                    <td>{{ $message }}</td>
+                                    <td><b>{{ $a->host }}</b><div class="muted small">{{ implode(', ', array_slice((array) $a->ips, 0, 2)) }}{{ ($p['mode'] ?? '') === 'local' ? ' · mismo servidor que el panel' : '' }}</div></td>
+                                    <td>@if ($a->isOnline() && ($p['active'] ?? false))<span class="pill ok">Activo</span>@elseif ($a->isOnline())<span class="pill error">Reglas apagadas</span>@else<span class="pill warn">Sin respuesta</span>@endif
+                                        @if ($p['attack'] ?? false)<span class="pill error">Bajo ataque</span>@endif</td>
+                                    <td>{{ ($p['tcp'] ?? '') ?: '—' }}</td>
+                                    <td>{{ ($p['udp'] ?? '') ?: '—' }}</td>
+                                    <td>{{ $p['conn_limit'] ?? '—' }}</td>
+                                    <td>{{ ($p['bans_local'] ?? 0) + ($p['bans_panel'] ?? 0) }}</td>
+                                    <td>{{ number_format($p['dropped'] ?? 0, 0, ',', '.') }}</td>
+                                    <td>{{ $a->version }}</td>
+                                    <td>{{ $a->last_seen_at ? $a->last_seen_at->diffForHumans() : '—' }}</td>
                                 </tr>
                             @endforeach
                             </tbody>
@@ -286,150 +188,344 @@
                     </div>
                 </div>
             @endif
+            @if ($otherAgents->isNotEmpty())
+                <div class="alert w">Hay {{ $otherAgents->count() }} agente(s) conectado(s) que no se han podido asociar a ningún nodo del panel (suele pasar si el FQDN del nodo apunta a una IP distinta a la del servidor). Funcionan igualmente.</div>
+            @endif
+        </div>
 
-            <form action="{{ route('admin.extensions.antiddos.optimize') }}" method="POST" id="vs-optimize-form">
-                @csrf
-                <div class="box box-primary">
-                    <div class="box-header with-border"><h3 class="box-title">1. Elige un perfil</h3></div>
-                    <div class="box-body">
-                        <div class="vs-profiles">
-                            @foreach ($profiles as $key => $profile)
-                                <label class="vs-profile {{ $settings['default_profile'] === $key ? 'selected' : '' }}">
-                                    <b><input type="radio" name="profile" value="{{ $key }}" {{ $settings['default_profile'] === $key ? 'checked' : '' }}> {{ $profile['label'] }}</b>
-                                    <span class="text-muted">{{ $profile['description'] }}</span>
-                                    <div class="text-muted" style="margin-top:6px; font-size:12px;">
-                                        view-distance {{ $profile['properties']['view-distance'] }} ·
-                                        simulation-distance {{ $profile['properties']['simulation-distance'] }}
-                                    </div>
-                                </label>
-                            @endforeach
+        {{-- ═══════════════════════ PROTECCIÓN ═══════════════════════ --}}
+        <div class="pane" id="pane-shield">
+            <div class="grid">
+                <div class="col-2">
+                    <form action="{{ route('admin.extensions.antiddos.firewall.update') }}" method="POST" class="card">
+                        @csrf
+                        @method('PATCH')
+                        <div class="card-h"><h3>Firewall de los nodos</h3>
+                            <span class="pill {{ $fw['managed'] ? 'ok' : 'warn' }}">{{ $fw['managed'] ? 'Gestionado desde el panel' : 'Aún sin gestionar' }}</span></div>
+                        <div class="card-b">
+                            @unless ($fw['managed'])
+                                <div class="alert w" style="margin-bottom:14px;">Se muestran los valores que ya tiene el nodo. Al guardar, el panel pasa a controlarlos y los envía a <b>todos</b> los nodos.</div>
+                            @endunless
+                            <div class="f-row">
+                                <div class="f">
+                                    <label for="tcp">Puertos TCP de Minecraft</label>
+                                    <input class="form-control" id="tcp" name="tcp" value="{{ old('tcp', $fw['tcp']) }}" placeholder="25565:25666" required>
+                                    <small>Un puerto (<code>25565</code>), un rango (<code>25565:25666</code>) o varios separados por comas.</small>
+                                </div>
+                                <div class="f">
+                                    <label for="udp">Puertos UDP (Bedrock/Geyser)</label>
+                                    <input class="form-control" id="udp" name="udp" value="{{ old('udp', $fw['udp']) }}" placeholder="19132">
+                                    <small>Déjalo vacío si no usas Bedrock.</small>
+                                </div>
+                            </div>
+                            <details>
+                                <summary>Límites por IP (avanzado)</summary>
+                                <div class="f-row" style="margin-top:12px;">
+                                    <div class="f"><label for="conn_limit">Conexiones simultáneas</label>
+                                        <input class="form-control" type="number" id="conn_limit" name="conn_limit" min="3" max="1000" value="{{ old('conn_limit', $fw['conn_limit']) }}">
+                                        <small>Máx. por IP. Súbelo si hay colegios/cibers con una sola IP.</small></div>
+                                    <div class="f"><label for="syn_rate">Conexiones nuevas por segundo</label>
+                                        <input class="form-control" type="number" id="syn_rate" name="syn_rate" min="2" max="1000" value="{{ old('syn_rate', $fw['syn_rate']) }}">
+                                        <small>Si una IP supera esto, se bloquea.</small></div>
+                                    <div class="f"><label for="udp_rate">Paquetes UDP por segundo</label>
+                                        <input class="form-control" type="number" id="udp_rate" name="udp_rate" min="20" max="100000" value="{{ old('udp_rate', $fw['udp_rate']) }}">
+                                        <small>Solo descarta el exceso.</small></div>
+                                    <div class="f"><label for="ban_seconds">Duración del bloqueo (s)</label>
+                                        <input class="form-control" type="number" id="ban_seconds" name="ban_seconds" min="30" max="604800" value="{{ old('ban_seconds', $fw['ban_seconds']) }}">
+                                        <small>900 = 15 minutos.</small></div>
+                                </div>
+                            </details>
+                            <p class="muted small" style="margin:0;">No incluyas aquí el puerto del panel (80/443) ni el de SSH: se gestionan aparte.</p>
                         </div>
-                        <label class="vs-check"><input type="checkbox" name="flags" value="1" checked> Aplicar banderas de la JVM (Aikar) y heap proporcional al comando de arranque</label>
-                        <label class="vs-check"><input type="checkbox" name="files" value="1" checked> Optimizar server.properties, spigot.yml, bukkit.yml y paper-world-defaults.yml (con copia de seguridad)</label>
-                        <label class="vs-check"><input type="checkbox" name="restart" value="1"> Reiniciar los servidores que estén encendidos para que surta efecto ya</label>
-                        <p class="text-muted" style="margin:8px 0 0;">Solo se modifican claves que ya existen en cada archivo. Si un servidor aún no ha arrancado nunca, esos archivos no existen: vuelve a aplicar el perfil después del primer arranque. Procesa hasta {{ $batchLimit }} servidores por envío; para todos a la vez usa <code>sudo antiddos optimize-server apply --profile=… --all</code>.</p>
-                    </div>
+                        <div class="card-f"><button class="btn btn-primary" type="submit">Guardar y enviar a los nodos</button></div>
+                    </form>
                 </div>
 
-                <div class="box box-primary">
-                    <div class="box-header with-border"><h3 class="box-title">2. Elige los servidores</h3></div>
-                    <div class="box-body">
-                        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
-                            <input type="text" id="vs-filter" class="form-control" style="max-width:280px;" placeholder="Filtrar esta lista…">
-                            <button type="button" class="btn btn-default" id="vs-select-all">Marcar visibles</button>
-                            <button type="button" class="btn btn-default" id="vs-select-none">Desmarcar todos</button>
+                <div class="col">
+                    <div class="card">
+                        <div class="card-h"><h3>Modo «bajo ataque»</h3></div>
+                        <div class="card-b">
+                            <p class="muted">Endurece los límites de todos los nodos de golpe (conexiones y ráfagas ÷3, bloqueos ×4). Úsalo cuando notes un ataque y desactívalo al terminar.</p>
+                            <form action="{{ route('admin.extensions.antiddos.attack') }}" method="POST">
+                                @csrf
+                                <input type="hidden" name="mode" value="{{ $fw['attack'] ? 'off' : 'on' }}">
+                                <button class="btn btn-{{ $fw['attack'] ? 'default' : 'danger' }} btn-block" type="submit">{{ $fw['attack'] ? 'Desactivar modo bajo ataque' : 'Activar modo bajo ataque' }}</button>
+                            </form>
                         </div>
-                        <div class="table-wrap">
-                            <table class="table table-hover" id="vs-servers">
-                                <thead><tr><th style="width:30px;"></th><th>Servidor</th><th>Egg</th><th>Nodo</th><th>RAM</th><th>Estado</th></tr></thead>
+                    </div>
+                    <div class="card">
+                        <div class="card-h"><h3>Clave de la API</h3><span class="pill {{ $hasApiKey ? 'ok' : 'warn' }}">{{ $hasApiKey ? 'Creada' : 'Sin crear' }}</span></div>
+                        <div class="card-b">
+                            <p class="muted">Solo la usan los nodos que están en <b>otra máquina</b>. Al regenerarla, los nodos con la anterior dejan de sincronizar hasta actualizarla.</p>
+                            <form action="{{ route('admin.extensions.antiddos.apikey') }}" method="POST" onsubmit="return confirm('Se generará una clave nueva y los nodos con la anterior dejarán de sincronizar. ¿Continuar?');">
+                                @csrf
+                                <button class="btn btn-warning btn-block" type="submit">{{ $hasApiKey ? 'Regenerar clave' : 'Generar clave' }}</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <form action="{{ route('admin.extensions.antiddos.settings.update') }}" method="POST" class="card">
+                @csrf
+                @method('PATCH')
+                <div class="card-h"><h3>Escudo web del panel</h3>
+                    <span class="pill {{ $settings['enabled'] ? 'ok' : 'warn' }}">{{ $settings['enabled'] ? 'Activo' : 'Apagado' }}</span></div>
+                <div class="card-b">
+                    <label class="check"><input type="checkbox" name="enabled" value="1" {{ $settings['enabled'] ? 'checked' : '' }}>
+                        <span>Activar el escudo web<small>Limita las peticiones por IP al panel y bloquea abusos y fuerza bruta del login.</small></span></label>
+                    <div class="f-row" style="margin-top:12px;">
+                        <div class="f"><label for="general_limit">Peticiones por minuto</label>
+                            <input class="form-control" type="number" id="general_limit" name="general_limit" min="30" max="100000" value="{{ old('general_limit', $settings['general_limit']) }}">
+                            <small>Por IP. No cuentan los archivos estáticos ni Wings.</small></div>
+                        <div class="f"><label for="auth_limit">Intentos de login por minuto</label>
+                            <input class="form-control" type="number" id="auth_limit" name="auth_limit" min="3" max="1000" value="{{ old('auth_limit', $settings['auth_limit']) }}">
+                            <small>Por IP.</small></div>
+                        <div class="f"><label for="ban_minutes">Primer bloqueo (minutos)</label>
+                            <input class="form-control" type="number" id="ban_minutes" name="ban_minutes" min="1" max="10080" value="{{ old('ban_minutes', $settings['ban_minutes']) }}">
+                            <small>Se duplica con cada reincidencia.</small></div>
+                        <div class="f"><label for="ban_max_minutes">Bloqueo máximo (minutos)</label>
+                            <input class="form-control" type="number" id="ban_max_minutes" name="ban_max_minutes" min="1" max="43200" value="{{ old('ban_max_minutes', $settings['ban_max_minutes']) }}">
+                            <small>1440 = 24 horas.</small></div>
+                    </div>
+                    <div class="f">
+                        <label for="whitelist">Lista blanca (nunca se bloquea)</label>
+                        <textarea class="form-control" id="whitelist" name="whitelist" rows="4" placeholder="203.0.113.7&#10;198.51.100.0/24">{{ old('whitelist', $settings['whitelist']) }}</textarea>
+                        <small>Una IP o rango por línea; también se aplica a los nodos. Tu IP actual: <code>{{ $myIp }}</code></small>
+                    </div>
+                    <details>
+                        <summary>Más opciones</summary>
+                        <div class="f-row" style="margin-top:12px;">
+                            <div class="f"><label for="retention_days">Días que se guardan los eventos</label>
+                                <input class="form-control" type="number" id="retention_days" name="retention_days" min="1" max="365" value="{{ old('retention_days', $settings['retention_days']) }}"></div>
+                            <div class="f"><label for="heap_percent">% de RAM para Java (optimización)</label>
+                                <input class="form-control" type="number" id="heap_percent" name="heap_percent" min="60" max="95" value="{{ old('heap_percent', $settings['heap_percent']) }}">
+                                <small>El resto queda para memoria nativa; al 100 % Docker mata el servidor.</small></div>
+                            <div class="f"><label for="default_profile">Perfil preseleccionado</label>
+                                <select class="form-control" id="default_profile" name="default_profile">
+                                    @foreach ($profiles as $key => $profile)
+                                        <option value="{{ $key }}" {{ old('default_profile', $settings['default_profile']) === $key ? 'selected' : '' }}>{{ $profile['label'] }}</option>
+                                    @endforeach
+                                </select></div>
+                        </div>
+                        <label class="check"><input type="checkbox" name="log_events" value="1" {{ $settings['log_events'] ? 'checked' : '' }}><span>Registrar eventos</span></label>
+                    </details>
+                </div>
+                <div class="card-f"><button class="btn btn-primary" type="submit">Guardar escudo web</button></div>
+            </form>
+        </div>
+
+        {{-- ═══════════════════════ BLOQUEOS ═══════════════════════ --}}
+        <div class="pane" id="pane-blocks">
+            <div class="grid">
+                <div class="col">
+                    <form action="{{ route('admin.extensions.antiddos.blocks.store') }}" method="POST" class="card">
+                        @csrf
+                        <div class="card-h"><h3>Bloquear una IP</h3></div>
+                        <div class="card-b">
+                            <div class="f"><label for="ban-ip">IP</label><input class="form-control" id="ban-ip" name="ip" placeholder="203.0.113.7" required></div>
+                            <div class="f"><label for="ban-minutes">Minutos</label><input class="form-control" id="ban-minutes" type="number" name="minutes" min="1" placeholder="Vacío = permanente"></div>
+                            <div class="f"><label for="ban-reason">Motivo</label><input class="form-control" id="ban-reason" name="reason" maxlength="200" placeholder="Opcional"></div>
+                            <small class="muted">Llega a todos los nodos en menos de un minuto.</small>
+                        </div>
+                        <div class="card-f"><button class="btn btn-danger" type="submit">Bloquear</button></div>
+                    </form>
+                </div>
+                <div class="col-2">
+                    <div class="card">
+                        <div class="card-h"><h3>IPs bloqueadas</h3></div>
+                        <div class="tw">
+                            <table class="table">
+                                <thead><tr><th>IP</th><th>Origen</th><th>Caduca</th><th>Reinc.</th><th>Motivo</th><th></th></tr></thead>
                                 <tbody>
-                                @forelse ($servers as $server)
-                                    @php($state = $states[$server->id] ?? null)
-                                    <tr data-name="{{ \Illuminate\Support\Str::lower($server->name . ' ' . ($server->egg->name ?? '') . ' ' . ($server->node->name ?? '')) }}">
-                                        <td><input type="checkbox" name="servers[]" value="{{ $server->id }}" class="vs-srv"></td>
-                                        <td><a href="{{ route('admin.servers.view', $server->id) }}">{{ $server->name }}</a></td>
-                                        <td>{{ $server->egg->name ?? '—' }}</td>
-                                        <td>{{ $server->node->name ?? '—' }}</td>
-                                        <td>{{ $server->memory > 0 ? $server->memory . ' MiB' : 'ilimitada' }}</td>
+                                @forelse ($blocks as $block)
+                                    <tr>
+                                        <td><code>{{ $block->ip }}</code></td>
+                                        <td>{{ ['auto' => 'Escudo', 'manual' => 'Manual'][$block->source] ?? $block->source }}</td>
+                                        <td>{{ $block->expires_at ? $block->expires_at->diffForHumans() : 'permanente' }}</td>
+                                        <td>{{ $block->strikes }}</td>
+                                        <td>{{ \Illuminate\Support\Str::limit((string) $block->reason, 60) }}</td>
                                         <td>
-                                            @if ($state)
-                                                <span class="label label-success">{{ $profiles[$state->profile]['label'] ?? $state->profile }}</span>
-                                            @else
-                                                <span class="text-muted">sin optimizar</span>
-                                            @endif
+                                            <form action="{{ route('admin.extensions.antiddos.blocks.destroy') }}" method="POST" style="display:inline;">
+                                                @csrf @method('DELETE')
+                                                <input type="hidden" name="ip" value="{{ $block->ip }}">
+                                                <button class="btn btn-xs btn-default" type="submit">Desbloquear</button>
+                                            </form>
                                         </td>
                                     </tr>
                                 @empty
-                                    <tr><td colspan="6" class="text-muted">No se encontraron servidores de Minecraft{{ $search !== '' ? ' con esa búsqueda' : '' }}.</td></tr>
+                                    <tr><td colspan="6" class="muted">No hay IPs bloqueadas.</td></tr>
                                 @endforelse
                                 </tbody>
                             </table>
                         </div>
-                        <p class="text-muted" style="margin:6px 0 0;">Se listan hasta 300 servidores cuyo egg/nest parece de Minecraft (Paper, Spigot, Purpur, Forge, Fabric, BungeeCord, Velocity…).</p>
                     </div>
-                    <div class="box-footer">
-                        <button type="submit" class="btn btn-success">Aplicar perfil a los marcados</button>
+                </div>
+            </div>
+        </div>
+
+        {{-- ═══════════════════════ OPTIMIZACIÓN ═══════════════════════ --}}
+        <div class="pane" id="pane-optimize">
+            @if (session('antiddos:report'))
+                <div class="card">
+                    <div class="card-h"><h3>Informe de la última operación</h3></div>
+                    <div class="card-b">
+                        @foreach (session('antiddos:report') as [$serverName, $level, $message])
+                            <div class="row-i"><span class="dot {{ $level === 'ok' ? 'ok' : ($level === 'warn' ? 'warn' : 'error') }}"></span>
+                                <div class="body"><b>{{ $serverName }}</b><span class="muted">{{ $message }}</span></div></div>
+                        @endforeach
+                    </div>
+                </div>
+            @endif
+
+            <form action="{{ route('admin.extensions.antiddos.optimize') }}" method="POST" id="ad-opt">
+                @csrf
+
+                <div class="card">
+                    <div class="card-h"><h3>1 · Elige un perfil</h3></div>
+                    <div class="card-b">
+                        <div class="profiles">
+                            @foreach ($profiles as $key => $profile)
+                                <label class="profile {{ $settings['default_profile'] === $key ? 'sel' : '' }}">
+                                    <b><input type="radio" name="profile" value="{{ $key }}" {{ $settings['default_profile'] === $key ? 'checked' : '' }}> {{ $profile['label'] }}</b>
+                                    <span class="muted">{{ $profile['description'] }}</span>
+                                    <div class="chips">
+                                        <span>visión {{ $profile['properties']['view-distance'] }}</span>
+                                        <span>simulación {{ $profile['properties']['simulation-distance'] }}</span>
+                                        <span>monstruos {{ $profile['bukkit']['spawn-limits.monsters'] ?? '—' }}</span>
+                                    </div>
+                                </label>
+                            @endforeach
+                        </div>
+                        <details>
+                            <summary>Comparar los perfiles</summary>
+                            <div class="tw" style="margin-top:10px;"><table class="table">
+                                <thead><tr><th>Ajuste</th>@foreach ($profiles as $profile)<th>{{ $profile['label'] }}</th>@endforeach</tr></thead>
+                                <tbody>
+                                @foreach ([
+                                    'Distancia de visión' => ['properties', 'view-distance'],
+                                    'Distancia de simulación' => ['properties', 'simulation-distance'],
+                                    'Rango de envío de entidades (%)' => ['properties', 'entity-broadcast-range-percentage'],
+                                    'Límite de monstruos' => ['bukkit', 'spawn-limits.monsters'],
+                                    'Límite de animales' => ['bukkit', 'spawn-limits.animals'],
+                                    'Rango de aparición de mobs' => ['spigot', 'world-settings.default.mob-spawn-range'],
+                                    'Actividad de monstruos (bloques)' => ['spigot', 'world-settings.default.entity-activation-range.monsters'],
+                                    'Colisiones máx. por entidad' => ['paper_world', 'collisions.max-entity-collisions'],
+                                ] as $label => [$section, $key])
+                                    <tr><td>{{ $label }}</td>@foreach ($profiles as $profile)<td>{{ $profile[$section][$key] ?? '—' }}</td>@endforeach</tr>
+                                @endforeach
+                                </tbody></table></div>
+                            <p class="muted small" style="margin:8px 0 0;">«—» = ese perfil no toca ese ajuste. Solo se cambian claves que ya existen en los archivos de cada servidor.</p>
+                        </details>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-h"><h3>2 · Qué aplicar</h3></div>
+                    <div class="card-b">
+                        <label class="check"><input type="checkbox" name="flags" value="1" checked>
+                            <span>Mejorar el arranque de Java <small>Banderas de la JVM (Aikar) y memoria proporcional a la RAM del servidor. Reduce los tirones del recolector de basura.</small></span></label>
+                        <label class="check"><input type="checkbox" name="files" value="1" checked>
+                            <span>Optimizar los archivos del servidor <small>server.properties, spigot.yml, bukkit.yml y paper-world-defaults.yml. Se guarda una copia para poder revertir.</small></span></label>
+                        <label class="check"><input type="checkbox" name="restart" value="1">
+                            <span>Reiniciar los servidores encendidos <small>Para que surta efecto ya. Si no, se aplica en el próximo reinicio.</small></span></label>
+
+                        <details>
+                            <summary>Personalizar (opcional)</summary>
+                            <p class="muted small" style="margin:10px 0;">Lo que rellenes aquí tiene prioridad sobre el perfil. Déjalo vacío para usar los valores del perfil.</p>
+                            <div class="f-row">
+                                <div class="f"><label for="view_distance">Distancia de visión</label>
+                                    <input class="form-control" type="number" id="view_distance" name="view_distance" min="2" max="32" placeholder="Según perfil"><small>Chunks que ve cada jugador. La opción que más CPU ahorra.</small></div>
+                                <div class="f"><label for="simulation_distance">Distancia de simulación</label>
+                                    <input class="form-control" type="number" id="simulation_distance" name="simulation_distance" min="2" max="32" placeholder="Según perfil"><small>Chunks donde se simulan mobs y cultivos.</small></div>
+                                <div class="f"><label for="entity_broadcast">Rango de entidades (%)</label>
+                                    <input class="form-control" type="number" id="entity_broadcast" name="entity_broadcast" min="10" max="100" placeholder="Según perfil"><small>Menos % = menos tráfico por jugador.</small></div>
+                                <div class="f"><label for="collisions">Colisiones máx. por entidad</label>
+                                    <input class="form-control" type="number" id="collisions" name="collisions" min="0" max="8" placeholder="Según perfil"><small>Paper. 2 reduce mucho la carga en granjas.</small></div>
+                            </div>
+                            <div class="f-row">
+                                <div class="f"><label for="mobs">Cantidad de mobs</label>
+                                    <select class="form-control" id="mobs" name="mobs">
+                                        <option value="profile">Según perfil</option>
+                                        <option value="reduced">Reducida</option>
+                                        <option value="minimum">Mínima</option>
+                                    </select><small>Límites de aparición y rango de spawn.</small></div>
+                                <div class="f"><label for="heap_percent_opt">% de RAM para Java</label>
+                                    <input class="form-control" type="number" id="heap_percent_opt" name="heap_percent" min="60" max="95" placeholder="{{ $settings['heap_percent'] }}"><small>Por defecto el de la pestaña Protección.</small></div>
+                            </div>
+                            <label class="check"><input type="checkbox" name="redstone" value="1"><span>Redstone alternativa (Alternate Current) <small>Mucho más rápida; puede alterar circuitos muy técnicos.</small></span></label>
+                            <label class="check"><input type="checkbox" name="no_treasure_maps" value="1"><span>Desactivar mapas del tesoro <small>Evita generar chunks lejanos al explorar.</small></span></label>
+                        </details>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-h"><h3>3 · Elige los servidores</h3><span class="muted small" id="ad-count">0 seleccionados</span></div>
+                    <div class="card-b">
+                        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; align-items:center;">
+                            <input type="text" id="ad-filter" class="form-control" style="max-width:240px;" placeholder="Buscar servidor…">
+                            <select id="ad-node" class="form-control" style="max-width:200px;">
+                                <option value="">Todos los nodos</option>
+                                @foreach ($servers->pluck('node.name')->filter()->unique()->sort() as $nodeName)
+                                    <option value="{{ \Illuminate\Support\Str::lower($nodeName) }}">{{ $nodeName }}</option>
+                                @endforeach
+                            </select>
+                            <label class="check" style="margin:0;"><input type="checkbox" id="ad-only-new"><span>Solo sin optimizar</span></label>
+                            <button type="button" class="btn btn-default" id="ad-all">Marcar visibles</button>
+                            <button type="button" class="btn btn-default" id="ad-none">Quitar marcas</button>
+                        </div>
+                        <div class="tw">
+                            <table class="table" id="ad-servers">
+                                <thead><tr><th style="width:30px;"></th><th>Servidor</th><th>Tipo</th><th>Nodo</th><th>RAM</th><th>Optimización</th></tr></thead>
+                                <tbody>
+                                @forelse ($servers as $server)
+                                    @php($state = $states[$server->id] ?? null)
+                                    <tr data-name="{{ \Illuminate\Support\Str::lower($server->name . ' ' . ($server->egg->name ?? '')) }}" data-node="{{ \Illuminate\Support\Str::lower($server->node->name ?? '') }}" data-opt="{{ $state ? 1 : 0 }}">
+                                        <td><input type="checkbox" name="servers[]" value="{{ $server->id }}" class="ad-srv"></td>
+                                        <td><a href="{{ route('admin.servers.view', $server->id) }}">{{ $server->name }}</a></td>
+                                        <td>{{ $server->egg->name ?? '—' }}</td>
+                                        <td>{{ $server->node->name ?? '—' }}</td>
+                                        <td>{{ $server->memory > 0 ? $server->memory . ' MiB' : 'ilimitada' }}</td>
+                                        <td>@if ($state)<span class="pill ok">{{ $profiles[$state->profile]['label'] ?? $state->profile }}</span> <span class="muted small">{{ $state->updated_at->diffForHumans() }}</span>@else<span class="muted">Sin optimizar</span>@endif</td>
+                                    </tr>
+                                @empty
+                                    <tr><td colspan="6" class="muted">No se encontraron servidores de Minecraft.</td></tr>
+                                @endforelse
+                                </tbody>
+                            </table>
+                        </div>
+                        <p class="muted small" style="margin:10px 0 0;">Hasta {{ $batchLimit }} servidores por envío. Para todos a la vez: <code>sudo antiddos optimize-server apply --profile=balanced --all</code></p>
+                    </div>
+                    <div class="card-f">
+                        <button type="submit" class="btn btn-success">Aplicar a los seleccionados</button>
                         <button type="submit" class="btn btn-default" formaction="{{ route('admin.extensions.antiddos.optimize.revert') }}"
-                                onclick="return confirm('¿Revertir la optimización de los servidores marcados? Se restaurarán el comando de arranque y los archivos originales.');">Revertir los marcados</button>
+                                onclick="return confirm('¿Revertir la optimización de los servidores marcados? Se restaurarán el comando de arranque y los archivos originales.');">Revertir los seleccionados</button>
                     </div>
                 </div>
             </form>
         </div>
 
-        {{-- ───────────────────────── NODOS ───────────────────────── --}}
-        <div class="vs-pane" id="pane-nodes">
-            @php($keyShown = session('antiddos:newkey') ?: 'TU_CLAVE')
-            <div class="vs-grid">
-                <div class="vs-col-2 box box-danger">
-                    <div class="box-header with-border"><h3 class="box-title">Instalar el firewall anti-DDoS en un nodo</h3></div>
-                    <div class="box-body">
-                        <p>Ejecútalo <b>como root en cada máquina con Wings</b> (y en la del panel si recibe jugadores). Cambia los puertos por los de tus servidores de Minecraft (<code>25565</code>, rangos <code>25565:25600</code>, Bedrock en <code>--udp</code>):</p>
-                        <pre>bash &lt;(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/Anti-DDOS-y-Optimizacion/main/install.sh) node-install --tcp=25565 --panel-url={{ $panelUrl ?: 'https://tu-panel' }} --key={{ $keyShown }}<button type="button" class="btn btn-xs btn-default vs-copy">Copiar</button></pre>
-                        <p class="text-muted">Con <code>--panel-url</code> y <code>--key</code> el nodo descarga cada 30 s las IPs bloqueadas y la lista blanca de este panel. La clave se muestra al instalar la extensión; si la perdiste, genera una nueva aquí a la derecha.</p>
-                        <p><b>Si el panel está en otra máquina</b>, añade su IP a la lista blanca del nodo para no cortar nunca a Wings:</p>
-                        <pre>sudo antiddos fw white-add IP_DEL_PANEL<button type="button" class="btn btn-xs btn-default vs-copy">Copiar</button></pre>
-                    </div>
-                </div>
-                <div class="vs-col box box-warning">
-                    <div class="box-header with-border"><h3 class="box-title">Clave de la API</h3></div>
-                    <form action="{{ route('admin.extensions.antiddos.apikey') }}" method="POST"
-                          onsubmit="return confirm('Se generará una clave nueva y los nodos con la anterior dejarán de sincronizar hasta que la actualices. ¿Continuar?');">
-                        @csrf
-                        <div class="box-body">
-                            <p>Estado: <b>{{ $hasApiKey ? 'configurada' : 'sin configurar' }}</b></p>
-                            <p class="text-muted">En un nodo ya instalado puedes cambiarla con <code>sudo antiddos fw set API_KEY NUEVA</code> y <code>sudo antiddos fw apply</code>.</p>
-                        </div>
-                        <div class="box-footer"><button type="submit" class="btn btn-warning">{{ $hasApiKey ? 'Regenerar clave' : 'Generar clave' }}</button></div>
+        {{-- ═══════════════════════ EVENTOS ═══════════════════════ --}}
+        <div class="pane" id="pane-events">
+            <div class="card">
+                <div class="card-h"><h3>Últimos eventos</h3>
+                    <form action="{{ route('admin.extensions.antiddos.events.clear') }}" method="POST" style="display:inline;" onsubmit="return confirm('¿Vaciar el registro de eventos?');">
+                        @csrf @method('DELETE')<button class="btn btn-xs btn-default" type="submit">Vaciar</button>
                     </form>
                 </div>
-            </div>
-
-            <div class="box box-primary">
-                <div class="box-header with-border"><h3 class="box-title">Comandos útiles en el nodo</h3></div>
-                <div class="box-body table-wrap">
+                <div class="tw">
                     <table class="table">
-                        <tbody>
-                        <tr><td><code>sudo antiddos attack-on</code></td><td><b>Modo «bajo ataque»</b>: límites 3 veces más estrictos al instante. Vuelve con <code>attack-off</code>.</td></tr>
-                        <tr><td><code>sudo antiddos fw status</code></td><td>Estado, límites y paquetes descartados.</td></tr>
-                        <tr><td><code>sudo antiddos fw top</code></td><td>IPs con más conexiones a tus puertos (para localizar al atacante).</td></tr>
-                        <tr><td><code>sudo antiddos ban 1.2.3.4</code></td><td>Bloquea una IP en el firewall local y en el panel.</td></tr>
-                        <tr><td><code>sudo antiddos whitelist add 1.2.3.4</code></td><td>IP o rango que nunca se bloquea.</td></tr>
-                        <tr><td><code>sudo antiddos fw set TCP_PORTS 25565:25600</code></td><td>Cambia puertos/límites (y luego <code>fw apply</code>). Claves: TCP_PORTS, UDP_PORTS, WEB_PORTS, CONN_LIMIT, SYN_RATE, UDP_RATE, BAN_SECONDS…</td></tr>
-                        <tr><td><code>sudo antiddos optimize-host apply</code></td><td>Ajusta el sistema del nodo (swap, THP, BBR, límites de ficheros).</td></tr>
-                        <tr><td><code>sudo antiddos nginx-on</code></td><td>(En el panel) límites de peticiones en nginx: corta ataques HTTP antes de que lleguen a PHP.</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-
-        {{-- ───────────────────────── EVENTOS ───────────────────────── --}}
-        <div class="vs-pane" id="pane-events">
-            <div class="box box-primary">
-                <div class="box-header with-border">
-                    <h3 class="box-title">Últimos eventos</h3>
-                    <div class="box-tools pull-right">
-                        <form action="{{ route('admin.extensions.antiddos.events.clear') }}" method="POST" style="display:inline;"
-                              onsubmit="return confirm('¿Vaciar el registro de eventos?');">
-                            @csrf
-                            @method('DELETE')
-                            <button class="btn btn-xs btn-default" type="submit">Vaciar</button>
-                        </form>
-                    </div>
-                </div>
-                <div class="box-body table-wrap">
-                    <table class="table table-hover">
                         <thead><tr><th>Fecha</th><th>Tipo</th><th>IP</th><th>Detalle</th></tr></thead>
                         <tbody>
                         @forelse ($events as $event)
                             <tr>
                                 <td style="white-space:nowrap;">{{ $event->created_at->format('Y-m-d H:i:s') }}</td>
-                                <td><span class="label label-{{ in_array($event->type, ['auto-ban', 'ban'], true) ? 'danger' : (in_array($event->type, ['optimize', 'optimize-revert'], true) ? 'success' : 'default') }}">{{ $event->type }}</span></td>
-                                <td>{{ $event->ip ? $event->ip : '—' }}</td>
+                                <td><span class="pill {{ in_array($event->type, ['auto-ban', 'ban', 'attack'], true) ? 'error' : (in_array($event->type, ['optimize', 'optimize-revert'], true) ? 'ok' : '') }}">{{ $event->type }}</span></td>
+                                <td>{{ $event->ip ?: '—' }}</td>
                                 <td>{{ $event->message }}</td>
                             </tr>
                         @empty
-                            <tr><td colspan="4" class="text-muted">Aún no hay eventos.</td></tr>
+                            <tr><td colspan="4" class="muted">Aún no hay eventos.</td></tr>
                         @endforelse
                         </tbody>
                     </table>
@@ -440,76 +536,67 @@
 
     <script>
         (function () {
-            var tabs = document.querySelectorAll('#vs-tabs a[data-tab]');
-            var names = Array.prototype.map.call(tabs, function (a) { return a.getAttribute('data-tab'); });
+            var $ = function (s, r) { return (r || document).querySelector(s); };
+            var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
 
+            var tabs = $$('#ad-tabs a');
+            var names = tabs.map(function (a) { return a.getAttribute('data-tab'); });
             function show(name) {
-                if (names.indexOf(name) === -1) { name = 'overview'; }
-                names.forEach(function (n) {
-                    document.getElementById('pane-' + n).classList.toggle('active', n === name);
-                });
-                Array.prototype.forEach.call(tabs, function (a) {
-                    a.classList.toggle('active', a.getAttribute('data-tab') === name);
-                });
-                try { history.replaceState(null, '', '#' + name); } catch (e) { /* sin historial */ }
+                if (names.indexOf(name) === -1) { name = 'status'; }
+                names.forEach(function (n) { $('#pane-' + n).classList.toggle('active', n === name); });
+                tabs.forEach(function (a) { a.classList.toggle('active', a.getAttribute('data-tab') === name); });
+                try { history.replaceState(null, '', '#' + name); } catch (e) {}
             }
+            tabs.forEach(function (a) { a.addEventListener('click', function () { show(a.getAttribute('data-tab')); }); });
+            show(location.hash.replace('#', '') || 'status');
 
-            Array.prototype.forEach.call(tabs, function (a) {
-                a.addEventListener('click', function () { show(a.getAttribute('data-tab')); });
-            });
-            Array.prototype.forEach.call(document.querySelectorAll('[data-goto]'), function (a) {
-                a.addEventListener('click', function (e) { e.preventDefault(); show(a.getAttribute('data-goto')); });
-            });
-            show(location.hash.replace('#', '') || 'overview');
-
-            // Perfiles: resalta el elegido.
-            var profiles = document.querySelectorAll('.vs-profile');
-            Array.prototype.forEach.call(document.querySelectorAll('.vs-profile input'), function (r) {
-                r.addEventListener('change', function () {
-                    Array.prototype.forEach.call(profiles, function (p) {
-                        p.classList.toggle('selected', p.querySelector('input').checked);
-                    });
-                });
-            });
-
-            // Lista de servidores: filtro y seleccion masiva (solo filas visibles).
-            var filter = document.getElementById('vs-filter');
-            var rows = document.querySelectorAll('#vs-servers tbody tr[data-name]');
-            if (filter) {
-                filter.addEventListener('input', function () {
-                    var q = filter.value.toLowerCase().trim();
-                    Array.prototype.forEach.call(rows, function (tr) {
-                        tr.style.display = !q || tr.getAttribute('data-name').indexOf(q) !== -1 ? '' : 'none';
-                    });
-                });
-            }
-            function setVisible(checked) {
-                Array.prototype.forEach.call(rows, function (tr) {
-                    if (tr.style.display !== 'none') { tr.querySelector('.vs-srv').checked = checked; }
-                });
-            }
-            var all = document.getElementById('vs-select-all');
-            var none = document.getElementById('vs-select-none');
-            if (all) { all.addEventListener('click', function () { setVisible(true); }); }
-            if (none) {
-                none.addEventListener('click', function () {
-                    Array.prototype.forEach.call(document.querySelectorAll('.vs-srv'), function (c) { c.checked = false; });
-                });
-            }
-
-            // Botones "Copiar" de los bloques de comandos.
-            Array.prototype.forEach.call(document.querySelectorAll('.vs-copy'), function (btn) {
-                btn.addEventListener('click', function () {
-                    var pre = btn.parentNode;
-                    var text = pre.textContent.replace(btn.textContent, '').trim();
+            // Copiar comandos
+            $$('.copy').forEach(function (b) {
+                b.addEventListener('click', function () {
+                    var clone = b.parentNode.cloneNode(true);
+                    var btn = clone.querySelector('.copy'); if (btn) { btn.remove(); }
                     if (navigator.clipboard) {
-                        navigator.clipboard.writeText(text).then(function () {
-                            btn.textContent = '¡Copiado!';
-                            setTimeout(function () { btn.textContent = 'Copiar'; }, 1500);
+                        navigator.clipboard.writeText(clone.textContent.trim()).then(function () {
+                            b.textContent = '¡Copiado!'; setTimeout(function () { b.textContent = 'Copiar'; }, 1500);
                         });
                     }
                 });
             });
+
+            // Perfiles
+            $$('.profile input').forEach(function (r) {
+                r.addEventListener('change', function () {
+                    $$('.profile').forEach(function (p) { p.classList.toggle('sel', $('input', p).checked); });
+                });
+            });
+
+            // Lista de servidores: filtros y seleccion
+            var rows = $$('#ad-servers tbody tr[data-name]');
+            var count = $('#ad-count');
+            function refresh() { if (count) { count.textContent = $$('.ad-srv:checked').length + ' seleccionados'; } }
+            function filter() {
+                var q = ($('#ad-filter').value || '').toLowerCase().trim();
+                var node = $('#ad-node').value;
+                var onlyNew = $('#ad-only-new').checked;
+                rows.forEach(function (tr) {
+                    var ok = (!q || tr.getAttribute('data-name').indexOf(q) !== -1)
+                          && (!node || tr.getAttribute('data-node') === node)
+                          && (!onlyNew || tr.getAttribute('data-opt') === '0');
+                    tr.style.display = ok ? '' : 'none';
+                });
+            }
+            if ($('#ad-filter')) {
+                ['input', 'change'].forEach(function (ev) {
+                    $('#ad-filter').addEventListener(ev, filter);
+                    $('#ad-node').addEventListener(ev, filter);
+                    $('#ad-only-new').addEventListener(ev, filter);
+                });
+                $('#ad-all').addEventListener('click', function () {
+                    rows.forEach(function (tr) { if (tr.style.display !== 'none') { $('.ad-srv', tr).checked = true; } }); refresh();
+                });
+                $('#ad-none').addEventListener('click', function () { $$('.ad-srv').forEach(function (c) { c.checked = false; }); refresh(); });
+                $$('.ad-srv').forEach(function (c) { c.addEventListener('change', refresh); });
+            }
         })();
     </script>
 @endsection

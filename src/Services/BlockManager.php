@@ -174,6 +174,22 @@ class BlockManager
             $lines[] = 'W ' . $rule;
         }
 
+        // Ajustes del firewall gestionados desde el panel: "C CLAVE VALOR".
+        $settings = ShieldSetting::snapshot();
+        $map = [
+            'fw_tcp_ports' => 'TCP_PORTS', 'fw_udp_ports' => 'UDP_PORTS', 'fw_conn_limit' => 'CONN_LIMIT',
+            'fw_syn_rate' => 'SYN_RATE', 'fw_udp_rate' => 'UDP_RATE', 'fw_ban_seconds' => 'BAN_SECONDS',
+            'fw_attack_mode' => 'ATTACK_MODE',
+        ];
+
+        foreach ($map as $key => $agentKey) {
+            $value = trim((string) ($settings[$key] ?? ''));
+
+            if ($value !== '' && preg_match('/^[0-9:,-]+$/', $value)) {
+                $lines[] = "C {$agentKey} {$value}";
+            }
+        }
+
         return implode("\n", $lines) . ($lines ? "\n" : '');
     }
 }

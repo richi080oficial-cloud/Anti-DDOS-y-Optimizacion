@@ -143,6 +143,66 @@ final class OptimizationProfiles
         return self::all()[$key] ?? null;
     }
 
+    /**
+     * Perfil base + ajustes personalizados del formulario. Todos opcionales:
+     * view_distance, simulation_distance, entity_broadcast (%), mobs
+     * (profile|reduced|minimum), redstone (bool), no_treasure_maps (bool),
+     * collisions (int).
+     *
+     * @param array<string, mixed> $o
+     */
+    public static function resolve(string $key, array $o = []): ?array
+    {
+        $p = self::get($key);
+
+        if ($p === null) {
+            return null;
+        }
+
+        $int = static fn (string $k, int $min, int $max): ?int => isset($o[$k]) && is_numeric($o[$k]) && $o[$k] !== ''
+            ? max($min, min($max, (int) $o[$k]))
+            : null;
+
+        if (($v = $int('view_distance', 2, 32)) !== null) {
+            $p['properties']['view-distance'] = $v;
+        }
+
+        if (($v = $int('simulation_distance', 2, 32)) !== null) {
+            $p['properties']['simulation-distance'] = $v;
+        }
+
+        if (($v = $int('entity_broadcast', 10, 100)) !== null) {
+            $p['properties']['entity-broadcast-range-percentage'] = $v;
+        }
+
+        if (($v = $int('collisions', 0, 8)) !== null) {
+            $p['paper_world']['collisions.max-entity-collisions'] = $v;
+        }
+
+        $mobs = [
+            'reduced' => ['monsters' => 35, 'animals' => 6, 'water-animals' => 4, 'water-ambient' => 5, 'ambient' => 3, 'range' => 4],
+            'minimum' => ['monsters' => 20, 'animals' => 4, 'water-animals' => 3, 'water-ambient' => 3, 'ambient' => 2, 'range' => 3],
+        ][$o['mobs'] ?? ''] ?? null;
+
+        if ($mobs !== null) {
+            foreach (['monsters', 'animals', 'water-animals', 'water-ambient', 'ambient'] as $type) {
+                $p['bukkit']['spawn-limits.' . $type] = $mobs[$type];
+            }
+
+            $p['spigot']['world-settings.default.mob-spawn-range'] = $mobs['range'];
+        }
+
+        if (!empty($o['redstone'])) {
+            $p['paper_world']['misc.redstone-implementation'] = 'ALTERNATE_CURRENT';
+        }
+
+        if (!empty($o['no_treasure_maps'])) {
+            $p['paper_world']['environment.treasure-maps.enabled'] = false;
+        }
+
+        return $p;
+    }
+
     /** @return array<string, string> clave => etiqueta */
     public static function labels(): array
     {

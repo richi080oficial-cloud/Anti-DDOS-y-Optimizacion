@@ -9,6 +9,7 @@ use Pterodactyl\Extensions\AntiDDoS\Models\ServerOptimization;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldBlock;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldEvent;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldSetting;
+use Pterodactyl\Extensions\AntiDDoS\Services\AgentRegistry;
 use Pterodactyl\Extensions\AntiDDoS\Services\BlockManager;
 use Pterodactyl\Extensions\AntiDDoS\Services\IpMatcher;
 use Pterodactyl\Extensions\AntiDDoS\Services\OptimizationProfiles;
@@ -30,11 +31,13 @@ class ShieldCommand extends Command
                             {--all : Aplicar a todos los servidores de Minecraft}
                             {--no-flags : No tocar el comando de arranque}
                             {--no-files : No tocar los archivos de configuracion}
-                            {--restart : Reiniciar los servidores encendidos}';
+                            {--restart : Reiniciar los servidores encendidos}
+                            {--payload= : JSON del latido (lo envia el agente de nodo local)}';
 
     protected $description = 'Utilidades internas de Anti-DDoS y Optimización (usadas por el CLI antiddos).';
 
     protected const TABLES = [
+        'antiddos_agents',
         'antiddos_optimizations',
         'antiddos_events',
         'antiddos_blocks',
@@ -58,6 +61,7 @@ class ShieldCommand extends Command
             'purge' => $this->purge(),
             'prune' => $this->prune($blocks),
             'feed' => $this->feed($blocks),
+            'heartbeat' => $this->heartbeat(),
             'ban' => $this->ban($blocks, $args),
             'unban' => $this->unban($blocks, $args),
             'bans' => $this->bans($blocks),
@@ -143,6 +147,20 @@ class ShieldCommand extends Command
         ShieldSetting::flush();
 
         $this->info("Bloqueos caducados eliminados: $removed (y eventos antiguos).");
+
+        return self::SUCCESS;
+    }
+
+    /** Latido del agente de nodo local (mismo efecto que POST /api/antiddos/heartbeat). */
+    protected function heartbeat(): int
+    {
+        $data = json_decode((string) $this->option('payload'), true);
+
+        if (!is_array($data) || app(AgentRegistry::class)->record($data) === null) {
+            $this->error('Payload no valido.');
+
+            return self::FAILURE;
+        }
 
         return self::SUCCESS;
     }

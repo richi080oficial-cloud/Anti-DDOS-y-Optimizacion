@@ -12,6 +12,9 @@ Anti-DDoS y optimización de servidores de Minecraft para Pterodactyl, en tres c
 
 - Panel de administración propio: `/admin/extensions/antiddos` (resumen, escudo web, bloqueos, optimización, nodos, eventos).
 - Comando `antiddos` con instalación, actualización, desinstalación y todo el control del firewall por consola.
+- **Estado de la instalación en el propio panel**: la pestaña *Estado* dice si está «todo instalado y funcionando» o qué falta (tablas, caché, clave, y el agente de **cada nodo**), con el comando que lo arregla. Los agentes informan al panel cada ~30 s.
+- **Firewall editable desde el admin**: puertos TCP/UDP (`25565:25666`), límites por IP y **modo «bajo ataque»** se cambian en la pestaña *Protección* y se envían a todos los nodos sin tocar la consola. Una vez guardados, el panel manda: un `antiddos fw set` manual en el nodo se sobrescribe en la siguiente sincronización.
+- **Optimización por pasos** (perfil → qué aplicar → servidores) con ajustes personalizables: distancia de visión y simulación, rango de entidades, cantidad de mobs, colisiones, redstone alternativa, mapas del tesoro y % de RAM para Java.
 - Los bloqueos del panel (manuales o automáticos) **se propagan a todos los nodos** en menos de un minuto.
 
 ## Qué puede y qué no puede parar (importante)

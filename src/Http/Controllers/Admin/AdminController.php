@@ -6,12 +6,14 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 use Pterodactyl\Extensions\AntiDDoS\Models\ServerOptimization;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldBlock;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldEvent;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldSetting;
 use Pterodactyl\Extensions\AntiDDoS\Services\BlockManager;
+use Pterodactyl\Extensions\AntiDDoS\Services\HealthCheck;
 use Pterodactyl\Extensions\AntiDDoS\Services\IpMatcher;
 use Pterodactyl\Extensions\AntiDDoS\Services\OptimizationProfiles;
 use Pterodactyl\Extensions\AntiDDoS\Services\ServerOptimizer;
@@ -59,9 +61,12 @@ class AdminController extends Controller
             ->keyBy('server_id');
 
         $settings = ShieldSetting::snapshot();
+        $health = app(HealthCheck::class)->run($request->ip());
 
         return view('antiddos::admin.index', [
-            'version' => trim((string) @file_get_contents(__DIR__ . '/../../../VERSION')) ?: 'dev',
+            'health' => $health,
+            'version' => $health['version'],
+            'fw' => $this->firewallValues($settings, $health['agents']),
             'settings' => $settings,
             'blocks' => $this->blocks->active(),
             'events' => ShieldEvent::query()->orderByDesc('id')->limit(150)->get(),
@@ -108,6 +113,120 @@ class AdminController extends Controller
 
         return $this->tab('shield')
             ->with('antiddos:success', 'Configuración guardada.');
+    }
+
+    /**
+     * Valores del firewall a mostrar: lo guardado en el panel; si aun no se ha
+     * configurado nada desde aqui, lo que informa el primer agente conectado.
+     *
+     * @param array<string, mixed> $settings
+     * @param \Illuminate\Support\Collection<int, \Pterodactyl\Extensions\AntiDDoS\Models\ShieldAgent> $agents
+     * @return array<string, mixed>
+     */
+    protected function firewallValues(array $settings, $agents): array
+    {
+        $reported = $agents->first(fn ($a) => $a->isOnline())?->payload ?? [];
+
+        $pick = function (string $setting, string $reportKey, mixed $default) use ($settings, $reported) {
+            $stored = (string) ($settings[$setting] ?? '');
+
+            if ($stored !== '') {
+                return $stored === '-' ? '' : $stored;
+            }
+
+            return $reported[$reportKey] ?? $default;
+        };
+
+        return [
+            'managed' => (string) ($settings['fw_tcp_ports'] ?? '') !== '',
+            'tcp' => $pick('fw_tcp_ports', 'tcp', '25565'),
+            'udp' => $pick('fw_udp_ports', 'udp', ''),
+            'conn_limit' => $pick('fw_conn_limit', 'conn_limit', 30),
+            'syn_rate' => $pick('fw_syn_rate', 'syn_rate', 15),
+            'udp_rate' => $pick('fw_udp_rate', 'udp_rate', 400),
+            'ban_seconds' => $pick('fw_ban_seconds', 'ban_seconds', 900),
+            'attack' => (string) ($settings['fw_attack_mode'] ?? '') === '1',
+        ];
+    }
+
+    /**
+     * Valida una lista de puertos «25565,25570:25600» (el firewall admite 15
+     * entradas de multiport; un rango cuenta como 2).
+     */
+    protected function portList(?string $value, string $label): ?string
+    {
+        $value = preg_replace('/\s+/', '', (string) $value) ?? '';
+
+        if ($value === '') {
+            return null;
+        }
+
+        $weight = 0;
+
+        foreach (explode(',', $value) as $part) {
+            if (!preg_match('/^(\d{1,5})(?::(\d{1,5}))?$/', $part, $m)) {
+                throw ValidationException::withMessages(['fw' => "{$label}: «{$part}» no es un puerto válido. Usa el formato 25565 o 25565:25666, separados por comas."]);
+            }
+
+            $from = (int) $m[1];
+            $to = isset($m[2]) ? (int) $m[2] : $from;
+
+            if ($from < 1 || $to > 65535 || $to < $from) {
+                throw ValidationException::withMessages(['fw' => "{$label}: «{$part}» está fuera de rango (1-65535, y el primer puerto debe ser menor que el segundo)."]);
+            }
+
+            $weight += isset($m[2]) ? 2 : 1;
+        }
+
+        if ($weight > 15) {
+            throw ValidationException::withMessages(['fw' => "{$label}: demasiadas entradas (el límite del firewall son 15; un rango cuenta como 2). Agrupa los puertos en rangos."]);
+        }
+
+        return $value;
+    }
+
+    public function updateFirewall(Request $request): RedirectResponse
+    {
+        $data = $request->validate([
+            'tcp' => 'required|string|max:200',
+            'udp' => 'nullable|string|max:200',
+            'conn_limit' => 'required|integer|min:3|max:1000',
+            'syn_rate' => 'required|integer|min:2|max:1000',
+            'udp_rate' => 'required|integer|min:20|max:100000',
+            'ban_seconds' => 'required|integer|min:30|max:604800',
+        ]);
+
+        $tcp = $this->portList($data['tcp'], 'Puertos TCP');
+        $udp = $this->portList($data['udp'] ?? '', 'Puertos UDP');
+
+        if ($tcp === null) {
+            return $this->tab('shield')->with('antiddos:error', 'Indica al menos un puerto TCP de Minecraft.');
+        }
+
+        ShieldSetting::write([
+            'fw_tcp_ports' => $tcp,
+            'fw_udp_ports' => $udp ?? '-',
+            'fw_conn_limit' => $data['conn_limit'],
+            'fw_syn_rate' => $data['syn_rate'],
+            'fw_udp_rate' => $data['udp_rate'],
+            'fw_ban_seconds' => $data['ban_seconds'],
+        ]);
+
+        ShieldEvent::record('settings', "Firewall de los nodos actualizado (TCP {$tcp}" . ($udp ? ", UDP {$udp}" : '') . ')', $request->ip(), ['user_id' => $request->user()?->id]);
+
+        return $this->tab('shield')->with('antiddos:success', 'Firewall guardado. Los nodos lo aplicarán en menos de un minuto.');
+    }
+
+    public function attackMode(Request $request): RedirectResponse
+    {
+        $on = $request->input('mode') === 'on';
+
+        ShieldSetting::write(['fw_attack_mode' => $on ? '1' : '0']);
+        ShieldEvent::record('attack', $on ? 'Modo «bajo ataque» ACTIVADO' : 'Modo «bajo ataque» desactivado', $request->ip(), ['user_id' => $request->user()?->id]);
+
+        return $this->tab('shield')->with('antiddos:success', $on
+            ? 'Modo «bajo ataque» activado: los nodos endurecen los límites en menos de un minuto.'
+            : 'Modo «bajo ataque» desactivado.');
     }
 
     public function ban(Request $request): RedirectResponse
@@ -163,16 +282,34 @@ class AdminController extends Controller
             'profile' => 'required|in:' . implode(',', array_keys(OptimizationProfiles::all())),
             'servers' => 'required|array|min:1',
             'servers.*' => 'integer|min:1',
+            'view_distance' => 'nullable|integer|min:2|max:32',
+            'simulation_distance' => 'nullable|integer|min:2|max:32',
+            'entity_broadcast' => 'nullable|integer|min:10|max:100',
+            'collisions' => 'nullable|integer|min:0|max:8',
+            'mobs' => 'nullable|in:profile,reduced,minimum',
+            'heap_percent' => 'nullable|integer|min:60|max:95',
         ]);
 
-        return $this->process($request, $data['servers'], function (Server $server) use ($request, $data) {
+        $options = array_filter([
+            'view_distance' => $data['view_distance'] ?? null,
+            'simulation_distance' => $data['simulation_distance'] ?? null,
+            'entity_broadcast' => $data['entity_broadcast'] ?? null,
+            'collisions' => $data['collisions'] ?? null,
+            'mobs' => $data['mobs'] ?? null,
+            'heap_percent' => $data['heap_percent'] ?? null,
+            'redstone' => $request->boolean('redstone'),
+            'no_treasure_maps' => $request->boolean('no_treasure_maps'),
+        ], fn ($v) => $v !== null && $v !== '' && $v !== false);
+
+        return $this->process($request, $data['servers'], function (Server $server) use ($request, $data, $options) {
             return $this->optimizer->apply(
                 $server,
                 $data['profile'],
                 $request->boolean('flags'),
                 $request->boolean('files'),
                 $request->boolean('restart'),
-                $request->user()?->id
+                $request->user()?->id,
+                $options
             );
         }, 'optimizados');
     }

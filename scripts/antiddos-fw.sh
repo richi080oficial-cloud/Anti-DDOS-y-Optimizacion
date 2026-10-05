@@ -36,38 +36,46 @@ WHITELIST_FILE="${ANTIDDOS_WHITELIST:-/etc/antiddos/whitelist.txt}"
 SYSCTL_FILE="/etc/sysctl.d/98-antiddos-shield.conf"
 TAG="antiddos"
 
-# ── Valores por defecto (se sobreescriben desde agent.conf) ───────────────────
-TCP_PORTS="25565"        # Minecraft Java y proxies (coma o rangos a:b; max. 15 entradas)
-UDP_PORTS=""             # Bedrock/Geyser: 19132
-WEB_PORTS=""             # 80,443 — vacio = sin limite SYN en la web (ver README: Cloudflare)
-SSH_PORT="22"            # vacio = sin proteccion SSH
-CONN_LIMIT=30            # conexiones simultaneas por IP
-SYN_RATE=15              # SYN nuevos por segundo por IP antes de bloquear
-SYN_BURST=30
-UDP_RATE=400             # paquetes UDP por segundo por IP
-UDP_BURST=800
-ICMP_RATE=5              # pings por segundo por IP
-BAN_SECONDS=900          # duracion del bloqueo automatico
-ATTACK_MODE=0            # 1 = limites estrictos
-SYSCTL=1                 # 1 = aplicar ajustes de kernel
-PANEL_URL=""             # https://panel.ejemplo.com  (para 'sync')
-PANEL_DIR=""             # ruta del panel si esta en ESTA maquina (sync local, sin clave)
-API_KEY=""               # clave de la API de Anti-DDoS y Optimización del panel
-STATIC_WHITELIST="127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
-EXTRA_WHITELIST=""       # IPs/CIDR adicionales separados por espacio
+# ── Configuracion ─────────────────────────────────────────────────────────────
+# Valores por defecto; agent.conf los sobreescribe y el panel puede cambiarlos
+# (lineas "C CLAVE VALOR" del feed, ver sync_feed).
+load_conf() {
+    TCP_PORTS="25565"        # Minecraft Java y proxies (coma o rangos a:b; max. 15 entradas)
+    UDP_PORTS=""             # Bedrock/Geyser: 19132
+    WEB_PORTS=""             # 80,443 — vacio = sin limite SYN en la web (ver README: Cloudflare)
+    SSH_PORT="22"            # vacio = sin proteccion SSH
+    CONN_LIMIT=30            # conexiones simultaneas por IP
+    SYN_RATE=15              # SYN nuevos por segundo por IP antes de bloquear
+    SYN_BURST=30
+    UDP_RATE=400             # paquetes UDP por segundo por IP
+    UDP_BURST=800
+    ICMP_RATE=5              # pings por segundo por IP
+    BAN_SECONDS=900          # duracion del bloqueo automatico
+    ATTACK_MODE=0            # 1 = limites estrictos
+    SYSCTL=1                 # 1 = aplicar ajustes de kernel
+    PANEL_URL=""             # https://panel.ejemplo.com  (para 'sync')
+    PANEL_DIR=""             # ruta del panel si esta en ESTA maquina (sync local, sin clave)
+    API_KEY=""               # clave de la API del panel
+    STATIC_WHITELIST="127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
+    EXTRA_WHITELIST=""       # IPs/CIDR adicionales separados por espacio
 
-# shellcheck disable=SC1090
-[[ -f "$CONF" ]] && . "$CONF"
+    # shellcheck disable=SC1090
+    [[ -f "$CONF" ]] && . "$CONF"
 
-if [[ "${ATTACK_MODE}" == "1" ]]; then
-    CONN_LIMIT=$(( CONN_LIMIT / 3 > 5 ? CONN_LIMIT / 3 : 5 ))
-    SYN_RATE=$(( SYN_RATE / 3 > 3 ? SYN_RATE / 3 : 3 ))
-    SYN_BURST=$(( SYN_BURST / 3 > 6 ? SYN_BURST / 3 : 6 ))
-    UDP_RATE=$(( UDP_RATE / 3 > 100 ? UDP_RATE / 3 : 100 ))
-    UDP_BURST=$(( UDP_BURST / 3 > 200 ? UDP_BURST / 3 : 200 ))
-    ICMP_RATE=1
-    BAN_SECONDS=$(( BAN_SECONDS * 4 ))
-fi
+    if [[ "${ATTACK_MODE}" == "1" ]]; then
+        CONN_LIMIT=$(( CONN_LIMIT / 3 > 5 ? CONN_LIMIT / 3 : 5 ))
+        SYN_RATE=$(( SYN_RATE / 3 > 3 ? SYN_RATE / 3 : 3 ))
+        SYN_BURST=$(( SYN_BURST / 3 > 6 ? SYN_BURST / 3 : 6 ))
+        UDP_RATE=$(( UDP_RATE / 3 > 100 ? UDP_RATE / 3 : 100 ))
+        UDP_BURST=$(( UDP_BURST / 3 > 200 ? UDP_BURST / 3 : 200 ))
+        ICMP_RATE=1
+        BAN_SECONDS=$(( BAN_SECONDS * 4 ))
+    fi
+}
+
+CONF_CHANGED=0
+AGENT_VERSION="$(tr -d '[:space:]' < /etc/antiddos/version 2>/dev/null || echo desconocida)"
+load_conf
 
 if [ -t 1 ]; then
     RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'; BLUE=$'\033[0;36m'; NC=$'\033[0m'
@@ -264,20 +272,46 @@ EOF
 }
 
 # ── Sincronizacion con el panel ───────────────────────────────────────────────
+# Ejecuta artisan del panel local como el usuario web (evita dejar cache de root).
+panel_artisan() {
+    local owner; owner="$(stat -c '%U' "$PANEL_DIR/public" 2>/dev/null || echo root)"
+    if [[ "$owner" != "root" ]] && have runuser; then
+        ( cd "$PANEL_DIR" && runuser -u "$owner" -- php artisan antiddos:manage "$@" )
+    else
+        ( cd "$PANEL_DIR" && php artisan antiddos:manage "$@" )
+    fi
+}
+
+panel_is_local() { [[ -n "$PANEL_DIR" && -f "$PANEL_DIR/artisan" ]] && have php; }
+
 # Descarga la lista del panel. Si el panel esta en esta misma maquina
 # (PANEL_DIR) se lee directamente con artisan: sin red y sin clave.
 fetch_feed() {
-    if [[ -n "$PANEL_DIR" && -f "$PANEL_DIR/artisan" ]] && have php; then
-        local owner; owner="$(stat -c '%U' "$PANEL_DIR/public" 2>/dev/null || echo root)"
-        if [[ "$owner" != "root" ]] && have runuser; then
-            ( cd "$PANEL_DIR" && runuser -u "$owner" -- php artisan antiddos:manage feed ) 2>&1
-        else
-            ( cd "$PANEL_DIR" && php artisan antiddos:manage feed ) 2>&1
-        fi
+    if panel_is_local; then
+        panel_artisan feed 2>&1
         return
     fi
     have curl || { echo "curl no esta instalado"; return 1; }
     curl -fsS --max-time 20 -H "X-Antiddos-Key: ${API_KEY}" "${PANEL_URL%/}/api/antiddos/feed" 2>&1
+}
+
+conf_get() { grep -m1 -E "^$1=" "$CONF" 2>/dev/null | cut -d= -f2- | tr -d '"'; }
+
+# Aplica un ajuste enviado por el panel si es valido y distinto del actual.
+apply_remote_setting() {
+    local key="$1" val="$2" re
+    case "$key" in
+        TCP_PORTS|UDP_PORTS) re='^[0-9:,]*$' ;;
+        CONN_LIMIT|SYN_RATE|UDP_RATE|BAN_SECONDS) re='^[0-9]+$' ;;
+        ATTACK_MODE) re='^[01]$' ;;
+        *) return 0 ;;
+    esac
+    [[ "$val" == "-" ]] && val=""
+    [[ "$val" =~ $re ]] || { warn "Ajuste del panel ignorado (valor no valido): ${key}"; return 0; }
+    [[ "$(conf_get "$key")" == "$val" ]] && return 0
+    set_conf "$key" "$val"
+    CONF_CHANGED=1
+    log "ajuste del panel: ${key}=${val:-<vacio>}"
 }
 
 sync_feed() {
@@ -295,12 +329,12 @@ sync_feed() {
     ipset flush vs_feed_tmp
     ipset flush vs_white_feed_tmp
 
-    local kind addr bans=0 whites=0
-    while read -r kind addr _; do
-        valid_ipv4 "${addr:-x}" || continue
+    local kind addr val bans=0 whites=0
+    while read -r kind addr val _; do
         case "$kind" in
-            B) ipset add -exist vs_feed_tmp "$addr"; bans=$((bans + 1)) ;;
-            W) ipset add -exist vs_white_feed_tmp "$addr"; whites=$((whites + 1)) ;;
+            B) valid_ipv4 "${addr:-x}" && { ipset add -exist vs_feed_tmp "$addr"; bans=$((bans + 1)); } ;;
+            W) valid_ipv4 "${addr:-x}" && { ipset add -exist vs_white_feed_tmp "$addr"; whites=$((whites + 1)); } ;;
+            C) apply_remote_setting "${addr:-}" "${val:-}" ;;
         esac
     done <<<"$body"
 
@@ -310,16 +344,70 @@ sync_feed() {
     return 0
 }
 
+# ── Informe de estado al panel ────────────────────────────────────────────────
+json_arr() { local out="" x; for x in "$@"; do out+="${out:+,}\"${x}\""; done; echo "[${out}]"; }
+
+count_set() { ipset list "$1" 2>/dev/null | awk '/^Number of entries:/ {print $4}' | head -1; }
+
+dropped_packets() {
+    { ipt -t raw -L ANTIDDOS -v -n -x 2>/dev/null
+      ipt -t raw -L VS_SYNFLOOD -v -n -x 2>/dev/null
+      ipt -t mangle -L ANTIDDOS_M -v -n -x 2>/dev/null; } \
+        | awk '$3=="DROP" {s+=$1} END{print s+0}'
+}
+
+build_heartbeat() {
+    local active=false mode=http ips bl bp dr
+    bl="$(count_set vs_ban)"; bp="$(count_set vs_feed)"; dr="$(dropped_packets)"
+    ipt -t raw -L ANTIDDOS -n >/dev/null 2>&1 && active=true
+    panel_is_local && mode=local
+    # shellcheck disable=SC2046
+    ips="$(json_arr $(hostname -I 2>/dev/null))"
+    printf '{"host":"%s","ips":%s,"version":"%s","active":%s,"mode":"%s","tcp":"%s","udp":"%s","attack":%s,"conn_limit":%s,"syn_rate":%s,"udp_rate":%s,"ban_seconds":%s,"bans_local":%s,"bans_panel":%s,"dropped":%s}' \
+        "$(hostname)" "$ips" "$AGENT_VERSION" "$active" "$mode" "$TCP_PORTS" "$UDP_PORTS" "${ATTACK_MODE:-0}" \
+        "$CONN_LIMIT" "$SYN_RATE" "$UDP_RATE" "$BAN_SECONDS" "${bl:-0}" "${bp:-0}" "${dr:-0}"
+}
+
+send_heartbeat() {
+    [[ -n "$PANEL_DIR" || ( -n "$PANEL_URL" && -n "$API_KEY" ) ]] || return 0
+    local json; json="$(build_heartbeat)"
+    if panel_is_local; then
+        panel_artisan heartbeat --payload="$json" >/dev/null 2>&1 || true
+    elif have curl; then
+        curl -fsS --max-time 15 -X POST -H "X-Antiddos-Key: ${API_KEY}" -H "Content-Type: application/json" \
+            --data "$json" "${PANEL_URL%/}/api/antiddos/heartbeat" >/dev/null 2>&1 || true
+    fi
+    return 0
+}
+
+# Sincronizacion periodica (timer de systemd): descarga bloqueos y ajustes del
+# panel; si los ajustes cambiaron, reconstruye las reglas.
+cmd_sync() {
+    require_root; require_tools
+    create_sets
+    sync_feed || true
+    if [[ "$CONF_CHANGED" == "1" ]]; then
+        load_conf
+        load_whitelist
+        apply_rules
+        apply_sysctl
+        log "reglas reaplicadas por cambios del panel (tcp=${TCP_PORTS} udp=${UDP_PORTS} attack=${ATTACK_MODE})"
+    fi
+    send_heartbeat
+}
+
 # ── Comandos ──────────────────────────────────────────────────────────────────
 cmd_apply() {
     require_root; require_tools
     create_sets
     load_whitelist
     sync_feed || true
+    [[ "$CONF_CHANGED" == "1" ]] && { load_conf; load_whitelist; }
     apply_rules
     apply_sysctl
     ok "Escudo activo. TCP: ${TCP_PORTS:-—}  UDP: ${UDP_PORTS:-—}  límite conexiones/IP: ${CONN_LIMIT}  modo ataque: $([[ $ATTACK_MODE == 1 ]] && echo SÍ || echo no)"
     log "apply (tcp=${TCP_PORTS} udp=${UDP_PORTS} attack=${ATTACK_MODE})"
+    send_heartbeat
 }
 
 cmd_remove() {
@@ -482,7 +570,7 @@ case "${1:-help}" in
     white-add) shift; cmd_white_add "$@" ;;
     white-del) shift; cmd_white_del "$@" ;;
     white-list|whitelist) cmd_white_list ;;
-    sync)      require_root; require_tools; create_sets; sync_feed ;;
+    sync)      cmd_sync ;;
     attack)    shift; cmd_attack "$@" ;;
     set)       shift; cmd_set "$@" ;;
     help|-h|--help) usage ;;

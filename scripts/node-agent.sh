@@ -174,6 +174,8 @@ do_install() {
     install -m 0755 "${SOURCE_DIR}/scripts/antiddos-fw.sh" "$SBIN_FW"
     install -m 0755 "${SOURCE_DIR}/scripts/optimize-host.sh" "$SBIN_TUNE"
     sed -i 's/\r$//' "$SBIN_FW" "$SBIN_TUNE"
+    mkdir -p "$CONF_DIR"
+    tr -d '[:space:]' < "${SOURCE_DIR}/VERSION" > "${CONF_DIR}/version" 2>/dev/null || echo desconocida > "${CONF_DIR}/version"
 
     # Panel en esta misma maquina: la lista de bloqueos se lee en local (sin clave).
     if [[ -z "$PANEL_LOCAL" && -z "$PANEL_URL" ]]; then

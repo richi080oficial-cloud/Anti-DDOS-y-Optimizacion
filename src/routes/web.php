@@ -19,6 +19,8 @@ Route::middleware(['web', 'auth', AdminAuthenticate::class])
     ->group(function () {
         Route::get('/', [AdminController::class, 'index'])->name('index');
         Route::patch('/settings', [AdminController::class, 'updateSettings'])->name('settings.update');
+        Route::patch('/firewall', [AdminController::class, 'updateFirewall'])->name('firewall.update');
+        Route::post('/attack', [AdminController::class, 'attackMode'])->name('attack');
 
         Route::post('/blocks', [AdminController::class, 'ban'])
             ->middleware('throttle:60,1')

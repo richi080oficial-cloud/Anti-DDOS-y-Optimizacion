@@ -59,10 +59,10 @@ class ServerOptimizer
      *
      * @return array{ok: array<int, string>, warn: array<int, string>}
      */
-    public function apply(Server $server, string $profileKey, bool $flags = true, bool $files = true, bool $restart = false, ?int $userId = null): array
+    public function apply(Server $server, string $profileKey, bool $flags = true, bool $files = true, bool $restart = false, ?int $userId = null, array $options = []): array
     {
         $report = ['ok' => [], 'warn' => []];
-        $profile = OptimizationProfiles::get($profileKey);
+        $profile = OptimizationProfiles::resolve($profileKey, $options);
 
         if ($profile === null) {
             $report['warn'][] = "Perfil desconocido: {$profileKey}";
@@ -75,7 +75,7 @@ class ServerOptimizer
         $touchedFiles = $state->files ?? [];
 
         if ($flags) {
-            $this->applyStartup($server, $state, $report);
+            $this->applyStartup($server, $state, $report, isset($options['heap_percent']) ? (int) $options['heap_percent'] : null);
         }
 
         if ($files) {
@@ -97,7 +97,7 @@ class ServerOptimizer
             'optimize',
             sprintf('Perfil «%s» aplicado a %s (#%d)', $profile['label'], $server->name, $server->id),
             null,
-            ['server_id' => $server->id, 'user_id' => $userId, 'profile' => $profileKey, 'ok' => $report['ok'], 'warn' => $report['warn']]
+            ['server_id' => $server->id, 'user_id' => $userId, 'profile' => $profileKey, 'options' => $options, 'ok' => $report['ok'], 'warn' => $report['warn']]
         );
 
         return $report;
@@ -165,7 +165,7 @@ class ServerOptimizer
     /**
      * @param array{ok: array<int, string>, warn: array<int, string>} $report
      */
-    protected function applyStartup(Server $server, ServerOptimization $state, array &$report): void
+    protected function applyStartup(Server $server, ServerOptimization $state, array &$report, ?int $heapPercent = null): void
     {
         if ((int) $server->memory <= 0) {
             $report['warn'][] = 'Banderas de JVM omitidas: el servidor tiene la RAM ilimitada (0), no se puede calcular el heap.';
@@ -173,7 +173,7 @@ class ServerOptimizer
             return;
         }
 
-        $new = $this->buildStartup((string) $server->startup, (int) $server->memory);
+        $new = $this->buildStartup((string) $server->startup, (int) $server->memory, $heapPercent);
 
         if ($new === null) {
             $report['warn'][] = 'Banderas de JVM omitidas: el comando de arranque no tiene el formato «java … -jar …».';
@@ -199,7 +199,7 @@ class ServerOptimizer
      * Reescribe «java <flags> -jar <resto>» con las banderas optimizadas y
      * conserva las propiedades de sistema (-D…) y modulos que ya hubiera.
      */
-    public function buildStartup(string $startup, int $memoryMb): ?string
+    public function buildStartup(string $startup, int $memoryMb, ?int $heapPercent = null): ?string
     {
         $startup = trim($startup);
 
@@ -217,7 +217,7 @@ class ServerOptimizer
             $keep[] = $token;
         }
 
-        $percent = max(60, min(95, (int) ShieldSetting::read('heap_percent', 90)));
+        $percent = max(60, min(95, $heapPercent ?? (int) ShieldSetting::read('heap_percent', 90)));
         $heap = '$(({{SERVER_MEMORY}}*' . $percent . '/100))M';
 
         $parts = array_merge(

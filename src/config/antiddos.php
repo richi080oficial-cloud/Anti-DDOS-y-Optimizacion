@@ -42,6 +42,17 @@ return [
         // optimizar (el resto queda para metaspace, hilos y buffers nativos;
         // si se asigna el 100 % Docker mata el contenedor por falta de memoria).
         'heap_percent' => 90,
+
+        // Firewall de los nodos, gestionado desde el panel. Vacio = "no gestionado":
+        // el nodo conserva lo que tenga en su agent.conf. Al guardar el formulario
+        // de proteccion se rellenan y se envian a todos los nodos (feed, lineas C).
+        'fw_tcp_ports' => '',
+        'fw_udp_ports' => '',     // '-' = ninguno
+        'fw_conn_limit' => '',
+        'fw_syn_rate' => '',
+        'fw_udp_rate' => '',
+        'fw_ban_seconds' => '',
+        'fw_attack_mode' => '',   // '1' = modo bajo ataque, '0' = normal
     ],
 
     // Rutas que NUNCA se cuentan ni se bloquean (patrones de Request::is()).
