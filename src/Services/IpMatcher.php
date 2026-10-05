@@ -107,6 +107,23 @@ final class IpMatcher
         return array_values(array_unique($out));
     }
 
+    /** Rangos IPv4 publicados por Cloudflare (https://www.cloudflare.com/ips-v4). */
+    public const CLOUDFLARE_V4 = [
+        '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22', '141.101.64.0/18',
+        '108.162.192.0/18', '190.93.240.0/20', '188.114.96.0/20', '197.234.240.0/22', '198.41.128.0/17',
+        '162.158.0.0/15', '104.16.0.0/13', '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22',
+    ];
+
+    /**
+     * True si la IP es de un servidor de Cloudflare. Si el panel ve una de estas
+     * como IP del visitante es que TRUSTED_PROXIES no esta configurado: la IP no
+     * es la del usuario real y no se puede limitar ni bloquear por ella.
+     */
+    public static function isCloudflare(string $ip): bool
+    {
+        return self::inList($ip, self::CLOUDFLARE_V4);
+    }
+
     /** IP privada, de loopback o reservada: nunca se bloquea desde el panel. */
     public static function isInternal(string $ip): bool
     {

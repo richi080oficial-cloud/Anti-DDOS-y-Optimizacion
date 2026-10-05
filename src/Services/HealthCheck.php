@@ -57,9 +57,11 @@ class HealthCheck
         };
 
         if ($requestIp !== null) {
-            $checks[] = IpMatcher::isInternal($requestIp)
+            $checks[] = IpMatcher::isCloudflare($requestIp)
+                ? $this->item('ip', 'IP real de los visitantes', 'error', "El panel ve una IP de Cloudflare ({$requestIp}) en vez de la IP real del visitante. Hasta que se configure, el escudo web NO actúa (por seguridad se desactiva solo para no bloquear a todos los usuarios de ese nodo de Cloudflare).", 'Añade en el .env del panel: TRUSTED_PROXIES con los rangos de https://www.cloudflare.com/ips-v4 y ejecuta: php artisan config:clear')
+                : (IpMatcher::isInternal($requestIp)
                 ? $this->item('ip', 'IP real de los visitantes', 'warn', "El panel ve tu IP como interna ({$requestIp}). Si entras desde internet, falta configurar TRUSTED_PROXIES (nginx/Cloudflare): hasta entonces el escudo web no actuará.", 'Revisa TRUSTED_PROXIES en el .env del panel.')
-                : $this->item('ip', 'IP real de los visitantes', 'ok', "El panel ve tu IP pública ({$requestIp}).");
+                : $this->item('ip', 'IP real de los visitantes', 'ok', "El panel ve tu IP pública ({$requestIp})."));
         }
 
         // ── Nodos ────────────────────────────────────────────────────────────
