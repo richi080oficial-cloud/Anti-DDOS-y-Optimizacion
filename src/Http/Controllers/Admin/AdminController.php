@@ -2,6 +2,7 @@
 
 namespace Pterodactyl\Extensions\AntiDDoS\Http\Controllers\Admin;
 
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
@@ -14,13 +15,21 @@ use Pterodactyl\Extensions\AntiDDoS\Models\ShieldSetting;
 use Pterodactyl\Extensions\AntiDDoS\Services\BlockManager;
 use Pterodactyl\Extensions\AntiDDoS\Services\HealthCheck;
 use Pterodactyl\Extensions\AntiDDoS\Services\IpMatcher;
+use Pterodactyl\Extensions\AntiDDoS\Services\MetricsService;
 use Pterodactyl\Extensions\AntiDDoS\Services\MinecraftPorts;
+use Pterodactyl\Extensions\AntiDDoS\Services\PortAdvisor;
+use Pterodactyl\Extensions\AntiDDoS\Services\PortChanger;
+use Pterodactyl\Models\Allocation;
+use Pterodactyl\Models\Server;
 
 class AdminController extends Controller
 {
     public function __construct(
         protected BlockManager $blocks,
         protected MinecraftPorts $minecraft,
+        protected PortAdvisor $advisor,
+        protected PortChanger $changer,
+        protected MetricsService $metrics,
     ) {
     }
 
@@ -39,7 +48,9 @@ class AdminController extends Controller
             'health' => $health,
             'version' => $health['version'],
             'fw' => $this->firewallValues($settings, $health['agents']),
-            'mc' => ['plan' => $this->minecraft->plan(), 'eggs' => $this->minecraft->eggs()],
+            'mc' => ['plan' => $plan = $this->minecraft->plan(), 'eggs' => $this->minecraft->eggs()],
+            'ports' => $this->portRows($fw = $this->firewallValues($settings, $health['agents']), $plan),
+            'metricsHosts' => $health['agents']->pluck('host')->all(),
             'settings' => $settings,
             'blocks' => $this->blocks->active(),
             'events' => ShieldEvent::query()->orderByDesc('id')->limit(150)->get(),
@@ -149,6 +160,158 @@ class AdminController extends Controller
         }
 
         return $value;
+    }
+
+    /**
+     * Servidores de Minecraft con la valoracion de su puerto principal.
+     *
+     * @param array<string, mixed> $fw
+     * @param array{tcp: string, udp: string} $plan
+     * @return array{rows: array<int, array<string, mixed>>, counts: array<string, int>}
+     */
+    protected function portRows(array $fw, array $plan): array
+    {
+        $counts = ['error' => 0, 'warn' => 0, 'ok' => 0];
+        $eggs = $this->minecraft->eggs()->where('selected', true)->keyBy('id');
+
+        if ($eggs->isEmpty()) {
+            return ['rows' => [], 'counts' => $counts];
+        }
+
+        $servers = Server::query()
+            ->with('node:id,name,daemonListen,daemonSFTP')
+            ->whereIn('egg_id', $eggs->keys()->all())
+            ->orderBy('name')
+            ->limit(500)
+            ->get(['id', 'name', 'uuidShort', 'egg_id', 'node_id', 'allocation_id']);
+
+        $allocations = Allocation::query()
+            ->whereIn('server_id', $servers->pluck('id'))
+            ->get(['id', 'server_id', 'ip', 'port'])
+            ->groupBy('server_id');
+
+        $protected = $fw['managed'] ? ['tcp' => $plan['tcp'], 'udp' => $plan['udp']] : null;
+        $rows = [];
+
+        foreach ($servers as $server) {
+            $mine = $allocations->get($server->id, collect());
+            $primary = $mine->firstWhere('id', $server->allocation_id);
+
+            if ($primary === null) {
+                continue;
+            }
+
+            $bedrock = (bool) ($eggs[$server->egg_id]['bedrock'] ?? false);
+            $reserved = $server->node ? [(int) $server->node->daemonListen, (int) $server->node->daemonSFTP] : [];
+            $issues = $this->advisor->assess((int) $primary->port, $bedrock, $protected, $reserved);
+            $level = $this->advisor->worst($issues);
+            $counts[$level]++;
+
+            $rows[] = [
+                'id' => $server->id,
+                'name' => $server->name,
+                'node' => $server->node->name ?? '—',
+                'ip' => $primary->ip,
+                'port' => (int) $primary->port,
+                'bedrock' => $bedrock,
+                'extras' => $mine->where('id', '!=', $server->allocation_id)->pluck('port')->sort()->values()->all(),
+                'issues' => $issues,
+                'level' => $level,
+            ];
+        }
+
+        $order = ['error' => 0, 'warn' => 1, 'ok' => 2];
+        usort($rows, fn (array $a, array $b) => [$order[$a['level']], $a['name']] <=> [$order[$b['level']], $b['name']]);
+
+        return ['rows' => $rows, 'counts' => $counts];
+    }
+
+    /** Datos de las graficas de trafico (JSON, los pide el navegador cada 30 s). */
+    public function trafficData(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'range' => 'nullable|in:' . implode(',', array_keys(MetricsService::RANGES)),
+            'host' => ['nullable', 'string', 'max:120', 'regex:/^[A-Za-z0-9._-]+$/'],
+        ]);
+
+        return new JsonResponse($this->metrics->series($data['range'] ?? '1h', $data['host'] ?? null));
+    }
+
+    /** Cambia el puerto de un servidor (el indicado o uno recomendado al azar). */
+    public function changePort(Request $request): RedirectResponse
+    {
+        $data = $request->validate([
+            'server_id' => 'required|integer|exists:servers,id',
+            'port' => 'nullable|integer|min:1024|max:65535',
+        ]);
+
+        $server = Server::query()->findOrFail($data['server_id']);
+        $port = isset($data['port']) ? (int) $data['port'] : $this->changer->suggest($server);
+
+        if (!$port) {
+            return $this->tab('ports')->with('antiddos:error', 'No se encontró ningún puerto libre recomendado en ese nodo. Indica uno a mano.');
+        }
+
+        $report = $this->changer->change($server, $port, $request->boolean('restart'), $request->user()?->id);
+
+        return $this->portReport([$server->name => $report], 1);
+    }
+
+    /** Cambia a un puerto recomendado (aleatorio y libre) los servidores marcados. */
+    public function autoPorts(Request $request): RedirectResponse
+    {
+        $data = $request->validate([
+            'servers' => 'required|array|min:1',
+            'servers.*' => 'integer|min:1',
+        ]);
+
+        @set_time_limit(300);
+
+        $ids = array_slice(array_values(array_unique(array_map('intval', $data['servers']))), 0, 40);
+        $reports = [];
+        $used = [];
+
+        foreach (Server::query()->whereIn('id', $ids)->get() as $server) {
+            $port = $this->changer->suggest($server, $used);
+
+            if (!$port) {
+                $reports[$server->name] = ['ok' => [], 'warn' => ['No se encontró un puerto libre recomendado.']];
+
+                continue;
+            }
+
+            $used[] = $port;
+            $reports[$server->name] = $this->changer->change($server, $port, $request->boolean('restart'), $request->user()?->id);
+        }
+
+        return $this->portReport($reports, count($ids));
+    }
+
+    /**
+     * @param array<string, array{ok: array<int, string>, warn: array<int, string>}> $reports
+     */
+    protected function portReport(array $reports, int $total): RedirectResponse
+    {
+        $lines = [];
+        $failed = 0;
+
+        foreach ($reports as $name => $report) {
+            foreach ($report['ok'] as $msg) {
+                $lines[] = [$name, 'ok', $msg];
+            }
+
+            foreach ($report['warn'] as $msg) {
+                $lines[] = [$name, 'warn', $msg];
+            }
+
+            if ($report['ok'] === [] || $report['warn'] !== []) {
+                $failed++;
+            }
+        }
+
+        return $this->tab('ports')
+            ->with($failed === $total && $total > 0 ? 'antiddos:error' : 'antiddos:success', sprintf('%d servidor(es) procesado(s)%s.', $total, $failed > 0 ? ", {$failed} con avisos" : ''))
+            ->with('antiddos:report', array_slice($lines, 0, 120));
     }
 
     public function updateFirewall(Request $request): RedirectResponse

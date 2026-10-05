@@ -7,6 +7,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldBlock;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldEvent;
+use Pterodactyl\Extensions\AntiDDoS\Models\ShieldMetric;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldSetting;
 
 /**
@@ -147,6 +148,12 @@ class BlockManager
 
         $days = max(1, (int) ShieldSetting::read('retention_days', 14));
         ShieldEvent::query()->where('created_at', '<', Carbon::now()->subDays($days))->delete();
+
+        try {
+            ShieldMetric::query()->where('recorded_at', '<', Carbon::now()->subDays(min($days, 14)))->delete();
+        } catch (\Throwable $e) {
+            // Tabla de metricas aun sin migrar.
+        }
 
         $this->flush();
 

@@ -4,6 +4,7 @@ namespace Pterodactyl\Extensions\AntiDDoS\Services;
 
 use Illuminate\Support\Carbon;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldAgent;
+use Pterodactyl\Extensions\AntiDDoS\Models\ShieldMetric;
 
 /**
  * Registra los latidos de los agentes de nodo. El payload viene de un script
@@ -47,6 +48,9 @@ class AgentRegistry
             'bans_local' => $int($data['bans_local'] ?? 0),
             'bans_panel' => $int($data['bans_panel'] ?? 0),
             'dropped' => $int($data['dropped'] ?? 0),
+            'tcp_pkts' => $int($data['tcp_pkts'] ?? 0),
+            'udp_pkts' => $int($data['udp_pkts'] ?? 0),
+            'syn' => $int($data['syn'] ?? 0),
         ];
 
         $agent = ShieldAgent::query()->firstOrNew(['host' => $host]);
@@ -56,6 +60,37 @@ class AgentRegistry
         $agent->last_seen_at = Carbon::now();
         $agent->save();
 
+        $this->sample($host, $payload);
+
         return $agent;
+    }
+
+    /**
+     * Guarda una muestra de contadores para las graficas (maximo una por minuto
+     * y agente). Un fallo aqui nunca debe impedir registrar el latido.
+     *
+     * @param array<string, mixed> $payload
+     */
+    protected function sample(string $host, array $payload): void
+    {
+        try {
+            $last = ShieldMetric::query()->where('host', $host)->orderByDesc('id')->first(['recorded_at']);
+
+            if ($last !== null && time() - $last->recorded_at->getTimestamp() < 55) {
+                return;
+            }
+
+            ShieldMetric::query()->create([
+                'host' => $host,
+                'recorded_at' => Carbon::now(),
+                'dropped' => $payload['dropped'],
+                'syn' => $payload['syn'],
+                'tcp_pkts' => $payload['tcp_pkts'],
+                'udp_pkts' => $payload['udp_pkts'],
+                'bans' => $payload['bans_local'] + $payload['bans_panel'],
+            ]);
+        } catch (\Throwable $e) {
+            // Sin tabla (migracion pendiente) o BD ocupada: se ignora.
+        }
     }
 }

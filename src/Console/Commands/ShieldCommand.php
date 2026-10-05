@@ -27,6 +27,7 @@ class ShieldCommand extends Command
     protected $description = 'Utilidades internas de Anti-DDoS y Optimización (usadas por el CLI antiddos).';
 
     protected const TABLES = [
+        'antiddos_metrics',
         'antiddos_agents',
         'antiddos_events',
         'antiddos_blocks',

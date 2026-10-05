@@ -146,7 +146,7 @@ remove_rules() {
     while ipt -t raw    -D PREROUTING -j ANTIDDOS   2>/dev/null; do :; done
     while ipt -t mangle -D PREROUTING -j ANTIDDOS_M 2>/dev/null; do :; done
     local spec
-    for spec in "raw ANTIDDOS" "raw VS_SYNFLOOD" "mangle ANTIDDOS_M"; do
+    for spec in "raw ANTIDDOS" "raw VS_SYNFLOOD" "raw ANTIDDOS_CTCP" "raw ANTIDDOS_CUDP" "raw ANTIDDOS_CSYN" "mangle ANTIDDOS_M"; do
         # shellcheck disable=SC2086
         set -- $spec
         ipt -t "$1" -F "$2" 2>/dev/null
@@ -159,6 +159,10 @@ apply_rules() {
     remove_rules
 
     ipt -t raw -N VS_SYNFLOOD
+    # Cadenas vacias: solo sirven para contar paquetes (graficas del panel).
+    ipt -t raw -N ANTIDDOS_CTCP
+    ipt -t raw -N ANTIDDOS_CUDP
+    ipt -t raw -N ANTIDDOS_CSYN
     ipt -t raw -N ANTIDDOS
     ipt -t mangle -N ANTIDDOS_M
 
@@ -189,6 +193,16 @@ apply_rules() {
     "${R[@]}" -p icmp --icmp-type echo-request \
         -m hashlimit --hashlimit-name vs_icmp --hashlimit-mode srcip \
         --hashlimit-above "${ICMP_RATE}/second" --hashlimit-burst 20 -j DROP
+
+    # Contadores del trafico externo hacia los puertos protegidos (lo de la lista
+    # blanca ya salio con RETURN y no se cuenta).
+    if [[ -n "$TCP_PORTS" ]]; then
+        "${R[@]}" -p tcp -m multiport --dports "$TCP_PORTS" -j ANTIDDOS_CTCP
+        "${R[@]}" -p tcp --syn -m multiport --dports "$TCP_PORTS" -j ANTIDDOS_CSYN
+    fi
+    if [[ -n "$UDP_PORTS" ]]; then
+        "${R[@]}" -p udp -m multiport --dports "$UDP_PORTS" -j ANTIDDOS_CUDP
+    fi
 
     # SYN flood por IP hacia los puertos protegidos (bloquea al atacante).
     if [[ -n "$TCP_PORTS" ]]; then
@@ -356,16 +370,20 @@ dropped_packets() {
         | awk '$3=="DROP" {s+=$1} END{print s+0}'
 }
 
+# Suma de paquetes de las reglas que saltan a una cadena contadora.
+chain_hits() { ipt -t raw -L ANTIDDOS -v -n -x 2>/dev/null | awk -v c="$1" '$3==c {s+=$1} END{print s+0}'; }
+
 build_heartbeat() {
-    local active=false mode=http ips bl bp dr
+    local active=false mode=http ips bl bp dr ct cu cs
+    ct="$(chain_hits ANTIDDOS_CTCP)"; cu="$(chain_hits ANTIDDOS_CUDP)"; cs="$(chain_hits ANTIDDOS_CSYN)"
     bl="$(count_set vs_ban)"; bp="$(count_set vs_feed)"; dr="$(dropped_packets)"
     ipt -t raw -L ANTIDDOS -n >/dev/null 2>&1 && active=true
     panel_is_local && mode=local
     # shellcheck disable=SC2046
     ips="$(json_arr $(hostname -I 2>/dev/null))"
-    printf '{"host":"%s","ips":%s,"version":"%s","active":%s,"mode":"%s","tcp":"%s","udp":"%s","attack":%s,"conn_limit":%s,"syn_rate":%s,"udp_rate":%s,"ban_seconds":%s,"bans_local":%s,"bans_panel":%s,"dropped":%s}' \
+    printf '{"host":"%s","ips":%s,"version":"%s","active":%s,"mode":"%s","tcp":"%s","udp":"%s","attack":%s,"conn_limit":%s,"syn_rate":%s,"udp_rate":%s,"ban_seconds":%s,"bans_local":%s,"bans_panel":%s,"dropped":%s,"tcp_pkts":%s,"udp_pkts":%s,"syn":%s}' \
         "$(hostname)" "$ips" "$AGENT_VERSION" "$active" "$mode" "$TCP_PORTS" "$UDP_PORTS" "${ATTACK_MODE:-0}" \
-        "$CONN_LIMIT" "$SYN_RATE" "$UDP_RATE" "$BAN_SECONDS" "${bl:-0}" "${bp:-0}" "${dr:-0}"
+        "$CONN_LIMIT" "$SYN_RATE" "$UDP_RATE" "$BAN_SECONDS" "${bl:-0}" "${bp:-0}" "${dr:-0}" "${ct:-0}" "${cu:-0}" "${cs:-0}"
 }
 
 send_heartbeat() {
