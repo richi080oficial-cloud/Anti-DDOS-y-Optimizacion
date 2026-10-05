@@ -15,6 +15,7 @@ use Pterodactyl\Extensions\AntiDDoS\Models\ShieldSetting;
 use Pterodactyl\Extensions\AntiDDoS\Services\BlockManager;
 use Pterodactyl\Extensions\AntiDDoS\Services\HealthCheck;
 use Pterodactyl\Extensions\AntiDDoS\Services\IpMatcher;
+use Pterodactyl\Extensions\AntiDDoS\Services\LiveTraffic;
 use Pterodactyl\Extensions\AntiDDoS\Services\MetricsService;
 use Pterodactyl\Extensions\AntiDDoS\Services\MinecraftPorts;
 use Pterodactyl\Extensions\AntiDDoS\Services\PortAdvisor;
@@ -30,6 +31,7 @@ class AdminController extends Controller
         protected PortAdvisor $advisor,
         protected PortChanger $changer,
         protected MetricsService $metrics,
+        protected LiveTraffic $live,
     ) {
     }
 
@@ -230,11 +232,16 @@ class AdminController extends Controller
     public function trafficData(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'range' => 'nullable|in:' . implode(',', array_keys(MetricsService::RANGES)),
+            'range' => 'nullable|in:live,' . implode(',', array_keys(MetricsService::RANGES)),
             'host' => ['nullable', 'string', 'max:120', 'regex:/^[A-Za-z0-9._-]+$/'],
         ]);
 
-        return new JsonResponse($this->metrics->series($data['range'] ?? '1h', $data['host'] ?? null));
+        $range = $data['range'] ?? 'live';
+        $response = $range === 'live'
+            ? $this->live->series($data['host'] ?? null)
+            : $this->metrics->series($range, $data['host'] ?? null);
+
+        return (new JsonResponse($response))->header('Cache-Control', 'no-store');
     }
 
     /** Cambia el puerto de un servidor (el indicado o uno recomendado al azar). */

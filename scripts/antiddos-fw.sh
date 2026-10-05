@@ -398,6 +398,66 @@ send_heartbeat() {
     return 0
 }
 
+# ── Modo «en vivo»: contadores cada 3 s para la grafica del panel ─────────────
+LIVE_DIR="/var/lib/antiddos"
+LIVE_RING="${LIVE_DIR}/live.ring"
+LIVE_JSON="${LIVE_DIR}/live.json"
+LIVE_EVERY=3
+LIVE_KEEP=100        # 100 muestras x 3 s = 5 minutos
+
+# "paquetes_frenados syn tcp udp ip_bloqueadas": una sola lectura de raw y otra de mangle.
+read_counters() {
+    local raw mangle drop_m bans
+    raw="$(ipt -t raw -L -v -n -x 2>/dev/null)"
+    mangle="$(ipt -t mangle -L ANTIDDOS_M -v -n -x 2>/dev/null)"
+    drop_m="$(awk '$3=="DROP" {s+=$1} END{print s+0}' <<<"$mangle")"
+    bans="$(( $(ipset list -t vs_ban 2>/dev/null | awk '/^Number of entries:/ {print $4}') + 0 ))"
+    awk -v dm="$drop_m" -v b="$bans" '
+        /^Chain / { chain = $2; next }
+        chain == "ANTIDDOS" || chain == "VS_SYNFLOOD" { if ($3 == "DROP") d += $1 }
+        chain == "ANTIDDOS" { if ($3 == "ANTIDDOS_CSYN") syn += $1; if ($3 == "ANTIDDOS_CTCP") tcp += $1; if ($3 == "ANTIDDOS_CUDP") udp += $1 }
+        END { printf "%d %d %d %d %d\n", d + dm, syn, tcp, udp, b }' <<<"$raw"
+}
+
+# Bucle del servicio antiddos-live: lee los contadores cada 3 s, guarda los ultimos
+# 5 minutos en un archivo que el panel lee directamente (panel en la misma maquina)
+# y, si el panel esta en otra, envia cada muestra por HTTPS.
+cmd_watch() {
+    require_root; require_tools
+    mkdir -p "$LIVE_DIR"; chmod 755 "$LIVE_DIR"
+    : > "$LIVE_RING"
+    info "Modo en vivo activo: contadores cada ${LIVE_EVERY} s (${LIVE_JSON})."
+
+    local ts line host
+    host="$(hostname)"
+
+    while true; do
+        load_conf
+        ts="$(date +%s)"
+        line="$(read_counters)"
+        echo "${ts} ${line}" >> "$LIVE_RING"
+
+        # Conserva solo las ultimas muestras (escritura atomica).
+        tail -n "$LIVE_KEEP" "$LIVE_RING" > "${LIVE_RING}.tmp" && mv -f "${LIVE_RING}.tmp" "$LIVE_RING"
+
+        awk -v host="$host" '
+            BEGIN { printf "{\"host\":\"%s\",\"samples\":[", host }
+            { printf "%s{\"t\":%d,\"dropped\":%s,\"syn\":%s,\"tcp\":%s,\"udp\":%s,\"bans\":%s}", (NR > 1 ? "," : ""), $1, $2, $3, $4, $5, $6 }
+            END { print "]}" }' "$LIVE_RING" > "${LIVE_JSON}.tmp" && chmod 644 "${LIVE_JSON}.tmp" && mv -f "${LIVE_JSON}.tmp" "$LIVE_JSON"
+
+        # Panel en otra maquina: se envia la muestra (en segundo plano, sin frenar el bucle).
+        if ! panel_is_local && [[ -n "$PANEL_URL" && -n "$API_KEY" ]] && have curl; then
+            # shellcheck disable=SC2086
+            set -- $line
+            ( curl -fsS --max-time 2 -X POST -H "X-Antiddos-Key: ${API_KEY}" -H "Content-Type: application/json" \
+                --data "{\"host\":\"${host}\",\"t\":${ts},\"dropped\":$1,\"syn\":$2,\"tcp\":$3,\"udp\":$4,\"bans\":$5}" \
+                "${PANEL_URL%/}/api/antiddos/live" >/dev/null 2>&1 & )
+        fi
+
+        sleep "$LIVE_EVERY"
+    done
+}
+
 # Sincronizacion periodica (timer de systemd): descarga bloqueos y ajustes del
 # panel; si los ajustes cambiaron, reconstruye las reglas.
 cmd_sync() {
@@ -590,6 +650,7 @@ case "${1:-help}" in
     white-del) shift; cmd_white_del "$@" ;;
     white-list|whitelist) cmd_white_list ;;
     sync)      cmd_sync ;;
+    watch)     cmd_watch ;;
     attack)    shift; cmd_attack "$@" ;;
     set)       shift; cmd_set "$@" ;;
     help|-h|--help) usage ;;

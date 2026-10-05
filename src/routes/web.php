@@ -30,7 +30,7 @@ Route::middleware(['web', 'auth', AdminAuthenticate::class])
         Route::post('/apikey', [AdminController::class, 'rotateKey'])->name('apikey');
 
         // Graficas de trafico (JSON para el dibujado en el navegador).
-        Route::get('/traffic', [AdminController::class, 'trafficData'])->middleware('throttle:60,1')->name('traffic');
+        Route::get('/traffic', [AdminController::class, 'trafficData'])->middleware('throttle:120,1')->name('traffic');
 
         // Cambio de puertos de servidores: habla con Wings, se limita el ritmo.
         Route::post('/ports/change', [AdminController::class, 'changePort'])->middleware('throttle:20,1')->name('ports.change');

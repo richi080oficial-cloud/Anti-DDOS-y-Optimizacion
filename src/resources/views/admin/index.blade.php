@@ -359,7 +359,8 @@
                             @foreach ($metricsHosts as $h)<option value="{{ $h }}">{{ $h }}</option>@endforeach
                         </select>
                         <div class="seg" id="ad-range">
-                            <button type="button" data-r="1h" class="on">1 h</button>
+                            <button type="button" data-r="live" class="on">En vivo</button>
+                            <button type="button" data-r="1h">1 h</button>
                             <button type="button" data-r="6h">6 h</button>
                             <button type="button" data-r="24h">24 h</button>
                             <button type="button" data-r="7d">7 días</button>
@@ -388,7 +389,7 @@
                     </div>
                     <p class="muted small" id="ad-empty" style="margin:12px 0 0; display:none;"></p>
                     <p class="muted small" style="margin:12px 0 0;">
-                        Cada punto es la <b>velocidad media real</b> del tramo, en paquetes por minuto (no se muestran tramos a medias ni se reparten huecos en picos falsos).
+                        <b>En vivo</b> muestra los últimos 5 minutos con un punto cada 3 s (se actualiza cada 3 s mientras miras esta pestaña); los demás rangos usan el historial guardado. Cada punto es la <b>velocidad media real</b> del tramo, en paquetes por minuto (no se muestran tramos a medias ni se reparten huecos en picos falsos).
                         Los <b>huecos</b> de la línea significan que el agente no informó en ese momento.
                         <b>Frenados</b> cuenta todo lo que descarta el firewall (IPs bloqueadas, límites por IP, paquetes malformados, ping, SSH y web si están activados), no solo lo dirigido a Minecraft.
                         <b>Conexiones nuevas, TCP y UDP</b> cuentan solo el tráfico externo hacia tus puertos protegidos (sin la lista blanca ni el tráfico interno de Docker).
@@ -657,14 +658,14 @@
                 var URL_TRAFFIC = @json(route('admin.extensions.antiddos.traffic'));
                 var COLORS = { dropped: '#dd4b39', syn: '#3c8dbc', tcp: '#00a65a', udp: '#f39c12' };
                 var NAMES = { dropped: 'Frenados', syn: 'Conexiones nuevas', tcp: 'TCP', udp: 'UDP' };
-                var state = { range: '1h', host: '', data: null, vis: { dropped: true, syn: true, tcp: false, udp: false }, loadedAt: 0, failing: false };
+                var state = { range: 'live', host: '', data: null, vis: { dropped: true, syn: true, tcp: false, udp: false }, loadedAt: 0, tried: 0, loading: false, failing: false };
 
                 function fmt(n) { return Math.round(n).toLocaleString('es-ES'); }
                 function fmt1(n) { return n >= 100 ? fmt(n) : (Math.round(n * 10) / 10).toLocaleString('es-ES'); }
                 function pad(n) { return (n < 10 ? '0' : '') + n; }
                 function label(ts, long) {
                     var d = new Date(ts * 1000);
-                    var hm = pad(d.getHours()) + ':' + pad(d.getMinutes());
+                    var hm = pad(d.getHours()) + ':' + pad(d.getMinutes()) + (state.range === 'live' ? ':' + pad(d.getSeconds()) : '');
                     return long || state.range === '7d' || state.range === '24h' ? pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + ' ' + hm : hm;
                 }
                 function ago(sec) {
@@ -754,9 +755,11 @@
                     var empty = $('#ad-empty');
                     if (!state.data.has_data) {
                         empty.style.display = 'block';
-                        empty.textContent = state.data.last_sample
-                            ? 'Todavía no hay suficientes datos en este periodo (hacen falta al menos dos muestras seguidas del agente). Espera un minuto.'
-                            : 'Aún no hay datos. Los agentes envían sus contadores cada ~30 s; si el agente es anterior a la versión 1.4.0, actualízalo con: sudo antiddos update --force';
+                        empty.textContent = state.range === 'live'
+                            ? 'Aún no llegan datos en vivo. Hace falta el servicio antiddos-live en el nodo (versión 1.5.0): actualízalo con «sudo antiddos update --force». Mientras tanto puedes usar los rangos de 1 h o más.'
+                            : (state.data.last_sample
+                                ? 'Todavía no hay suficientes datos en este periodo (hacen falta al menos dos muestras seguidas del agente). Espera un minuto.'
+                                : 'Aún no hay datos. Los agentes envían sus contadores cada ~30 s; si el agente es anterior a la versión 1.4.0, actualízalo con: sudo antiddos update --force');
                     } else { empty.style.display = 'none'; }
                 }
 
@@ -772,20 +775,23 @@
                         html = '<span class="muted">Cargando…</span>';
                     } else if (!d.last_sample) {
                         html = '<span style="color:var(--warn)">● Sin datos todavía</span>';
-                    } else if (age > 120) {
+                    } else if (age > (state.range === 'live' ? 15 : 120)) {
                         html = '<span style="color:var(--err)">● Sin datos recientes del agente</span> · último dato hace ' + ago(age) + ' (el agente no está informando)';
                     } else {
-                        html = '<span style="color:var(--ok)">● En directo</span> · último dato del agente hace ' + ago(age) + ' · se actualiza cada 15 s';
+                        html = '<span style="color:var(--ok)">● En directo</span> · último dato del agente hace ' + ago(age) + ' · se actualiza cada ' + (state.range === 'live' ? '3' : '15') + ' s';
                     }
                     el.innerHTML = html;
                 }
 
                 function load() {
+                    if (state.loading) { return; }
+                    state.loading = true; state.tried = Date.now();
                     var url = URL_TRAFFIC + '?range=' + encodeURIComponent(state.range) + (state.host ? '&host=' + encodeURIComponent(state.host) : '');
                     fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }, cache: 'no-store' })
                         .then(function (r) { if (!r.ok) { throw new Error(r.status); } return r.json(); })
                         .then(function (json) { state.data = json; state.loadedAt = Date.now(); state.failing = false; kpis(); draw(); live(); })
-                        .catch(function () { state.failing = true; live(); });
+                        .catch(function () { state.failing = true; live(); })
+                        .then(function () { state.loading = false; });
                 }
 
                 $$('#ad-range button').forEach(function (b) {
@@ -809,7 +815,11 @@
                 // (asi al volver ya esta fresco) y se refresca al instante al volver a la ventana.
                 tabs.forEach(function (a) { a.addEventListener('click', function () { if (a.getAttribute('data-tab') === 'traffic') { setTimeout(function () { load(); draw(); }, 30); } }); });
                 document.addEventListener('visibilitychange', function () { if (!document.hidden) { load(); } });
-                setInterval(function () { if (!document.hidden) { load(); } }, 15000);
+                setInterval(function () {
+                    if (document.hidden) { return; }
+                    var watching = state.range === 'live' && $('#pane-traffic').classList.contains('active');
+                    if (Date.now() - state.tried >= (watching ? 2800 : 14800)) { load(); }
+                }, 1000);
                 setInterval(live, 1000);
                 load();
             }

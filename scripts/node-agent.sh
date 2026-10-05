@@ -135,6 +135,22 @@ Type=oneshot
 ExecStart=${SBIN_FW} sync
 EOF
 
+    cat > "${UNIT_DIR}/antiddos-live.service" <<EOF
+[Unit]
+Description=Anti-DDoS y Optimización: contadores en vivo (cada 3 s) para la gráfica del panel
+After=antiddos-fw.service
+
+[Service]
+Type=simple
+ExecStart=${SBIN_FW} watch
+Restart=always
+RestartSec=3
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
     cat > "${UNIT_DIR}/antiddos-sync.timer" <<EOF
 [Unit]
 Description=Anti-DDoS y Optimización: sincronizar bloqueos con el panel cada 30 s
@@ -208,9 +224,10 @@ do_install() {
     remove_legacy_tune
     write_units
     systemctl daemon-reload
-    systemctl enable antiddos-fw.service antiddos-sync.timer >/dev/null 2>&1 || true
+    systemctl enable antiddos-fw.service antiddos-sync.timer antiddos-live.service >/dev/null 2>&1 || true
     systemctl restart antiddos-fw.service
     systemctl restart antiddos-sync.timer
+    systemctl restart antiddos-live.service || warn "No se pudo iniciar antiddos-live (la gráfica en vivo no funcionará)."
 
     ok "Agente de nodo instalado y activo."
     echo
@@ -222,12 +239,13 @@ do_install() {
 
 do_uninstall() {
     info "Desinstalando el agente de nodo…"
-    systemctl disable --now antiddos-sync.timer antiddos-fw.service >/dev/null 2>&1 || true
+    systemctl disable --now antiddos-live.service antiddos-sync.timer antiddos-fw.service >/dev/null 2>&1 || true
     [[ -x "$SBIN_FW" ]] && "$SBIN_FW" remove || true
     rm -f "${UNIT_DIR}"/antiddos-fw.service "${UNIT_DIR}"/antiddos-sync.service \
-          "${UNIT_DIR}"/antiddos-sync.timer
+          "${UNIT_DIR}"/antiddos-sync.timer "${UNIT_DIR}"/antiddos-live.service
     systemctl daemon-reload
     rm -f "$SBIN_FW"
+    rm -rf /var/lib/antiddos
     # La configuración (puertos, clave, lista blanca) se conserva por si se reinstala.
     ok "Agente de nodo eliminado. Configuración conservada en ${CONF_DIR} (bórrala si no la quieres)."
 }
@@ -238,6 +256,7 @@ do_status() {
         echo
         echo "  Servicio fw     : $(systemctl is-active antiddos-fw.service 2>/dev/null || echo desconocido)"
         echo "  Sync con panel  : $(systemctl is-active antiddos-sync.timer 2>/dev/null || echo desconocido)"
+        echo "  Gráfica en vivo : $(systemctl is-active antiddos-live.service 2>/dev/null || echo desconocido)"
     else
         echo "Anti-DDoS y Optimización — agente de nodo: no instalado (ejecuta: sudo antiddos node-install)"
     fi
