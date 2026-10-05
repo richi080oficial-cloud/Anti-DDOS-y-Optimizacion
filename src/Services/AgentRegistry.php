@@ -66,8 +66,8 @@ class AgentRegistry
     }
 
     /**
-     * Guarda una muestra de contadores para las graficas (maximo una por minuto
-     * y agente). Un fallo aqui nunca debe impedir registrar el latido.
+     * Guarda una muestra de contadores para las graficas (como maximo una cada
+     * ~25 s por agente). Un fallo aqui nunca debe impedir registrar el latido.
      *
      * @param array<string, mixed> $payload
      */
@@ -76,7 +76,7 @@ class AgentRegistry
         try {
             $last = ShieldMetric::query()->where('host', $host)->orderByDesc('id')->first(['recorded_at']);
 
-            if ($last !== null && time() - $last->recorded_at->getTimestamp() < 55) {
+            if ($last !== null && time() - $last->recorded_at->getTimestamp() < 25) {
                 return;
             }
 

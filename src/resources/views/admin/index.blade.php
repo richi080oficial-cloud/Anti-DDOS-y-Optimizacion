@@ -368,13 +368,14 @@
                 </div>
                 <div class="card-b">
                     <div class="kpis">
-                        <div class="kpi"><div class="n" id="k-dropped" style="color:var(--err)">—</div><div class="l">Paquetes frenados</div></div>
-                        <div class="kpi"><div class="n" id="k-peak">—</div><div class="l">Pico de frenados por minuto</div></div>
-                        <div class="kpi"><div class="n" id="k-syn" style="color:var(--pri)">—</div><div class="l">Conexiones nuevas (SYN)</div></div>
-                        <div class="kpi"><div class="n" id="k-tcp" style="color:var(--ok)">—</div><div class="l">Paquetes TCP recibidos</div></div>
-                        <div class="kpi"><div class="n" id="k-udp" style="color:var(--warn)">—</div><div class="l">Paquetes UDP recibidos</div></div>
+                        <div class="kpi"><div class="n" id="k-dropped" style="color:var(--err)">—</div><div class="l">Frenados en el periodo</div></div>
+                        <div class="kpi"><div class="n" id="k-peak">—</div><div class="l">Pico de frenados / min</div></div>
+                        <div class="kpi"><div class="n" id="k-syn" style="color:var(--pri)">—</div><div class="l">Conexiones nuevas</div></div>
+                        <div class="kpi"><div class="n" id="k-tcp" style="color:var(--ok)">—</div><div class="l">TCP recibidos</div></div>
+                        <div class="kpi"><div class="n" id="k-udp" style="color:var(--warn)">—</div><div class="l">UDP recibidos</div></div>
                         <div class="kpi"><div class="n" id="k-bans">—</div><div class="l">IPs bloqueadas ahora</div></div>
                     </div>
+                    <div id="ad-live" class="small" style="margin:0 0 8px;"></div>
                     <div class="chart-wrap">
                         <canvas id="ad-chart"></canvas>
                         <div class="tip" id="ad-tip"></div>
@@ -385,8 +386,14 @@
                         <label><input type="checkbox" data-s="tcp"><i style="background:#00a65a"></i> TCP</label>
                         <label><input type="checkbox" data-s="udp"><i style="background:#f39c12"></i> UDP</label>
                     </div>
-                    <p class="muted small" id="ad-empty" style="margin:12px 0 0; display:none;">Aún no hay datos. Los agentes envían sus contadores cada ~30 s; si el agente es anterior a la versión 1.4.0, actualízalo con <code>sudo antiddos update --force</code>.</p>
-                    <p class="muted small" style="margin:12px 0 0;">Solo cuenta el tráfico externo hacia los puertos protegidos (el de la lista blanca y el interno de Docker no se cuenta). «Frenados» incluye IPs bloqueadas, límites por IP y paquetes malformados. Se actualiza solo cada 30 segundos.</p>
+                    <p class="muted small" id="ad-empty" style="margin:12px 0 0; display:none;"></p>
+                    <p class="muted small" style="margin:12px 0 0;">
+                        Cada punto es la <b>velocidad media real</b> del tramo, en paquetes por minuto (no se muestran tramos a medias ni se reparten huecos en picos falsos).
+                        Los <b>huecos</b> de la línea significan que el agente no informó en ese momento.
+                        <b>Frenados</b> cuenta todo lo que descarta el firewall (IPs bloqueadas, límites por IP, paquetes malformados, ping, SSH y web si están activados), no solo lo dirigido a Minecraft.
+                        <b>Conexiones nuevas, TCP y UDP</b> cuentan solo el tráfico externo hacia tus puertos protegidos (sin la lista blanca ni el tráfico interno de Docker).
+                        Con varios nodos, las velocidades se suman.
+                    </p>
                 </div>
             </div>
         </div>
@@ -650,41 +657,49 @@
                 var URL_TRAFFIC = @json(route('admin.extensions.antiddos.traffic'));
                 var COLORS = { dropped: '#dd4b39', syn: '#3c8dbc', tcp: '#00a65a', udp: '#f39c12' };
                 var NAMES = { dropped: 'Frenados', syn: 'Conexiones nuevas', tcp: 'TCP', udp: 'UDP' };
-                var state = { range: '1h', host: '', data: null, vis: { dropped: true, syn: true, tcp: false, udp: false } };
+                var state = { range: '1h', host: '', data: null, vis: { dropped: true, syn: true, tcp: false, udp: false }, loadedAt: 0, failing: false };
 
                 function fmt(n) { return Math.round(n).toLocaleString('es-ES'); }
+                function fmt1(n) { return n >= 100 ? fmt(n) : (Math.round(n * 10) / 10).toLocaleString('es-ES'); }
                 function pad(n) { return (n < 10 ? '0' : '') + n; }
                 function label(ts, long) {
                     var d = new Date(ts * 1000);
                     var hm = pad(d.getHours()) + ':' + pad(d.getMinutes());
                     return long || state.range === '7d' || state.range === '24h' ? pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + ' ' + hm : hm;
                 }
+                function ago(sec) {
+                    if (sec < 90) { return Math.max(0, Math.round(sec)) + ' s'; }
+                    if (sec < 5400) { return Math.round(sec / 60) + ' min'; }
+                    return Math.round(sec / 3600) + ' h';
+                }
 
                 function draw(hover) {
                     var d = state.data; if (!d) { return; }
                     var dpr = window.devicePixelRatio || 1;
                     var W = cv.clientWidth, H = cv.clientHeight;
+                    if (!W) { return; }
                     cv.width = W * dpr; cv.height = H * dpr;
                     var g = cv.getContext('2d'); g.scale(dpr, dpr); g.clearRect(0, 0, W, H);
                     var fg = getComputedStyle(cv).color || '#888';
-                    var perMin = d.bucket / 60;
-                    var L = 56, R = 12, T = 12, B = 26, w = W - L - R, h = H - T - B, n = d.labels.length;
+                    var L = 60, R = 12, T = 12, B = 26, w = W - L - R, h = H - T - B, n = d.labels.length;
 
-                    var max = 1;
+                    var max = 0;
                     Object.keys(state.vis).forEach(function (k) {
-                        if (state.vis[k]) { d.series[k].forEach(function (v) { max = Math.max(max, v / perMin); }); }
+                        if (state.vis[k]) { d.series[k].forEach(function (v) { if (v !== null) { max = Math.max(max, v); } }); }
                     });
-                    var step = Math.pow(10, Math.floor(Math.log(max) / Math.LN10)), nice = [1, 2, 2.5, 5, 10];
-                    for (var i = 0; i < nice.length; i++) { if (nice[i] * step >= max / 4) { step = nice[i] * step; break; } }
-                    var top = Math.ceil(max / step) * step; if (top < step) { top = step; }
+                    if (max < 1) { max = 1; }
+                    var mag = Math.pow(10, Math.floor(Math.log(max) / Math.LN10)), step = mag;
+                    [1, 2, 2.5, 5, 10].some(function (m) { step = m * mag; return step >= max / 4; });
+                    var top = Math.max(step, Math.ceil(max / step) * step);
 
                     g.font = '11px sans-serif'; g.fillStyle = fg; g.strokeStyle = 'rgba(127,127,127,.25)'; g.lineWidth = 1;
                     g.textAlign = 'right'; g.textBaseline = 'middle';
                     for (var v = 0; v <= top + 0.001; v += step) {
                         var y = T + h - (v / top) * h;
                         g.beginPath(); g.moveTo(L, y); g.lineTo(W - R, y); g.stroke();
-                        g.fillText(fmt(v), L - 6, y);
+                        g.fillText(fmt1(v), L - 6, y);
                     }
+                    g.save(); g.translate(12, T + h / 2); g.rotate(-Math.PI / 2); g.textAlign = 'center'; g.fillText('paquetes / min', 0, 0); g.restore();
                     g.textAlign = 'center'; g.textBaseline = 'top';
                     var ticks = Math.min(6, n);
                     for (var t = 0; t < ticks; t++) {
@@ -692,15 +707,26 @@
                         g.fillText(label(d.labels[idx]), L + (n > 1 ? idx / (n - 1) : 0) * w, T + h + 6);
                     }
                     var X = function (i) { return L + (n > 1 ? i / (n - 1) : 0) * w; };
-                    var Y = function (val) { return T + h - (val / perMin / top) * h; };
+                    var Y = function (val) { return T + h - (val / top) * h; };
 
+                    // Cada serie se dibuja por tramos continuos: un hueco (null) corta la linea.
                     Object.keys(state.vis).forEach(function (k) {
                         if (!state.vis[k]) { return; }
-                        g.beginPath();
-                        d.series[k].forEach(function (val, i) { i ? g.lineTo(X(i), Y(val)) : g.moveTo(X(i), Y(val)); });
-                        g.strokeStyle = COLORS[k]; g.lineWidth = 2; g.stroke();
-                        g.lineTo(X(n - 1), T + h); g.lineTo(X(0), T + h); g.closePath();
-                        g.globalAlpha = 0.10; g.fillStyle = COLORS[k]; g.fill(); g.globalAlpha = 1;
+                        var vals = d.series[k], run = [];
+                        function flush() {
+                            if (!run.length) { return; }
+                            g.beginPath();
+                            run.forEach(function (i, j) { j ? g.lineTo(X(i), Y(vals[i])) : g.moveTo(X(i), Y(vals[i])); });
+                            g.strokeStyle = COLORS[k]; g.lineWidth = 2; g.stroke();
+                            if (run.length === 1) { g.fillStyle = COLORS[k]; g.beginPath(); g.arc(X(run[0]), Y(vals[run[0]]), 2.5, 0, 6.3); g.fill(); }
+                            else {
+                                g.lineTo(X(run[run.length - 1]), T + h); g.lineTo(X(run[0]), T + h); g.closePath();
+                                g.globalAlpha = 0.10; g.fillStyle = COLORS[k]; g.fill(); g.globalAlpha = 1;
+                            }
+                            run = [];
+                        }
+                        vals.forEach(function (val, i) { if (val === null) { flush(); } else { run.push(i); } });
+                        flush();
                     });
 
                     var tip = $('#ad-tip');
@@ -708,11 +734,15 @@
                         var hx = X(hover);
                         g.strokeStyle = 'rgba(127,127,127,.6)'; g.beginPath(); g.moveTo(hx, T); g.lineTo(hx, T + h); g.stroke();
                         var html = '<b>' + label(d.labels[hover], true) + '</b>';
+                        var any = false;
                         Object.keys(state.vis).forEach(function (k) {
-                            if (state.vis[k]) { html += '<br><span style="color:' + COLORS[k] + '">●</span> ' + NAMES[k] + ': ' + fmt(d.series[k][hover] / perMin) + ' /min'; }
+                            if (!state.vis[k]) { return; }
+                            var val = d.series[k][hover];
+                            if (val !== null) { any = true; html += '<br><span style="color:' + COLORS[k] + '">●</span> ' + NAMES[k] + ': ' + fmt1(val) + ' / min'; }
                         });
+                        if (!any) { html += '<br>Sin datos del agente en este momento'; }
                         tip.innerHTML = html; tip.style.display = 'block';
-                        tip.style.left = Math.min(W - 190, Math.max(0, hx + 12)) + 'px'; tip.style.top = (T + 6) + 'px';
+                        tip.style.left = Math.min(W - 230, Math.max(0, hx + 12)) + 'px'; tip.style.top = (T + 6) + 'px';
                     } else { tip.style.display = 'none'; }
                 }
 
@@ -721,15 +751,41 @@
                     $('#k-dropped').textContent = fmt(t.dropped); $('#k-peak').textContent = fmt(t.peak_dropped_per_min);
                     $('#k-syn').textContent = fmt(t.syn); $('#k-tcp').textContent = fmt(t.tcp); $('#k-udp').textContent = fmt(t.udp);
                     $('#k-bans').textContent = fmt(t.bans_now);
-                    $('#ad-empty').style.display = state.data.has_data ? 'none' : 'block';
+                    var empty = $('#ad-empty');
+                    if (!state.data.has_data) {
+                        empty.style.display = 'block';
+                        empty.textContent = state.data.last_sample
+                            ? 'Todavía no hay suficientes datos en este periodo (hacen falta al menos dos muestras seguidas del agente). Espera un minuto.'
+                            : 'Aún no hay datos. Los agentes envían sus contadores cada ~30 s; si el agente es anterior a la versión 1.4.0, actualízalo con: sudo antiddos update --force';
+                    } else { empty.style.display = 'none'; }
+                }
+
+                // Estado «en directo»: dice la verdad sobre lo reciente que son los datos.
+                function live() {
+                    var el = $('#ad-live'), d = state.data;
+                    if (!el) { return; }
+                    // Edad calculada con la hora del SERVIDOR (no la del navegador) para no depender de relojes desajustados.
+                    var age = d && d.last_sample ? (d.generated_at - d.last_sample) + (Date.now() - state.loadedAt) / 1000 : 0, html;
+                    if (state.failing) {
+                        html = '<span style="color:var(--err)">● No se pudo actualizar</span> · reintentando…';
+                    } else if (!d) {
+                        html = '<span class="muted">Cargando…</span>';
+                    } else if (!d.last_sample) {
+                        html = '<span style="color:var(--warn)">● Sin datos todavía</span>';
+                    } else if (age > 120) {
+                        html = '<span style="color:var(--err)">● Sin datos recientes del agente</span> · último dato hace ' + ago(age) + ' (el agente no está informando)';
+                    } else {
+                        html = '<span style="color:var(--ok)">● En directo</span> · último dato del agente hace ' + ago(age) + ' · se actualiza cada 15 s';
+                    }
+                    el.innerHTML = html;
                 }
 
                 function load() {
                     var url = URL_TRAFFIC + '?range=' + encodeURIComponent(state.range) + (state.host ? '&host=' + encodeURIComponent(state.host) : '');
-                    fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' } })
-                        .then(function (r) { return r.ok ? r.json() : null; })
-                        .then(function (json) { if (json) { state.data = json; kpis(); draw(); } })
-                        .catch(function () {});
+                    fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }, cache: 'no-store' })
+                        .then(function (r) { if (!r.ok) { throw new Error(r.status); } return r.json(); })
+                        .then(function (json) { state.data = json; state.loadedAt = Date.now(); state.failing = false; kpis(); draw(); live(); })
+                        .catch(function () { state.failing = true; live(); });
                 }
 
                 $$('#ad-range button').forEach(function (b) {
@@ -743,19 +799,19 @@
                 cv.addEventListener('mousemove', function (e) {
                     if (!state.data) { return; }
                     var rect = cv.getBoundingClientRect(), n = state.data.labels.length;
-                    var rel = (e.clientX - rect.left - 56) / Math.max(1, rect.width - 68);
+                    var rel = (e.clientX - rect.left - 60) / Math.max(1, rect.width - 72);
                     draw(Math.max(0, Math.min(n - 1, Math.round(rel * (n - 1)))));
                 });
                 cv.addEventListener('mouseleave', function () { draw(); });
                 window.addEventListener('resize', function () { draw(); });
 
-                // Solo se pide y se refresca mientras la pestaña esta visible.
-                var timer = null;
-                function visible() { return $('#pane-traffic').classList.contains('active'); }
-                function tick() { if (visible()) { load(); } }
-                tabs.forEach(function (a) { a.addEventListener('click', function () { if (a.getAttribute('data-tab') === 'traffic') { setTimeout(load, 30); } }); });
-                if (visible()) { load(); }
-                timer = setInterval(tick, 30000);
+                // Siempre al dia: se actualiza cada 15 s aunque estes en otra pestaña del panel
+                // (asi al volver ya esta fresco) y se refresca al instante al volver a la ventana.
+                tabs.forEach(function (a) { a.addEventListener('click', function () { if (a.getAttribute('data-tab') === 'traffic') { setTimeout(function () { load(); draw(); }, 30); } }); });
+                document.addEventListener('visibilitychange', function () { if (!document.hidden) { load(); } });
+                setInterval(function () { if (!document.hidden) { load(); } }, 15000);
+                setInterval(live, 1000);
+                load();
             }
         })();
     </script>
