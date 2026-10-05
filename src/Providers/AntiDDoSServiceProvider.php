@@ -10,7 +10,6 @@ use Pterodactyl\Extensions\AntiDDoS\Http\Middleware\AdminSidebarLink;
 use Pterodactyl\Extensions\AntiDDoS\Http\Middleware\ShieldGuard;
 use Pterodactyl\Extensions\AntiDDoS\Services\BlockManager;
 use Pterodactyl\Extensions\AntiDDoS\Services\RateCounter;
-use Pterodactyl\Extensions\AntiDDoS\Services\ServerOptimizer;
 
 /**
  * Punto de entrada de la extension. Todo (vistas, rutas, migraciones y config)
@@ -24,7 +23,6 @@ class AntiDDoSServiceProvider extends ServiceProvider
 
         $this->app->singleton(BlockManager::class);
         $this->app->singleton(RateCounter::class);
-        $this->app->singleton(ServerOptimizer::class);
 
         // Las rutas se cargan aqui, en register(), y no en boot(): el panel de
         // cliente de Pterodactyl es una SPA servida por una ruta "catch-all" que

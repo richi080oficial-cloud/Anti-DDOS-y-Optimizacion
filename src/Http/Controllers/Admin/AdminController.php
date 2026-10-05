@@ -8,28 +8,17 @@ use Illuminate\Routing\Controller;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
-use Pterodactyl\Extensions\AntiDDoS\Models\ServerOptimization;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldBlock;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldEvent;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldSetting;
 use Pterodactyl\Extensions\AntiDDoS\Services\BlockManager;
 use Pterodactyl\Extensions\AntiDDoS\Services\HealthCheck;
 use Pterodactyl\Extensions\AntiDDoS\Services\IpMatcher;
-use Pterodactyl\Extensions\AntiDDoS\Services\OptimizationProfiles;
-use Pterodactyl\Extensions\AntiDDoS\Services\ServerOptimizer;
-use Pterodactyl\Models\Server;
 
 class AdminController extends Controller
 {
-    /** Servidores que se listan como maximo en la pestana de optimizacion. */
-    protected const SERVER_LIST_LIMIT = 300;
-
-    /** Servidores que se procesan como maximo por envio desde el navegador. */
-    protected const OPTIMIZE_BATCH_LIMIT = 40;
-
     public function __construct(
         protected BlockManager $blocks,
-        protected ServerOptimizer $optimizer,
     ) {
     }
 
@@ -41,25 +30,6 @@ class AdminController extends Controller
 
     public function index(Request $request): View
     {
-        $q = trim((string) $request->query('q', ''));
-
-        $servers = Server::query()
-            ->with(['egg', 'nest', 'node'])
-            ->when($q !== '', fn ($query) => $query->where(function ($w) use ($q) {
-                $w->where('name', 'like', '%' . $q . '%')->orWhere('uuidShort', 'like', $q . '%');
-            }))
-            ->orderBy('name')
-            ->limit(2000)
-            ->get()
-            ->filter(fn (Server $s) => $this->optimizer->isMinecraft($s))
-            ->take(self::SERVER_LIST_LIMIT)
-            ->values();
-
-        $states = ServerOptimization::query()
-            ->whereIn('server_id', $servers->pluck('id'))
-            ->get()
-            ->keyBy('server_id');
-
         $settings = ShieldSetting::snapshot();
         $health = app(HealthCheck::class)->run($request->ip());
 
@@ -70,14 +40,9 @@ class AdminController extends Controller
             'settings' => $settings,
             'blocks' => $this->blocks->active(),
             'events' => ShieldEvent::query()->orderByDesc('id')->limit(150)->get(),
-            'profiles' => OptimizationProfiles::all(),
-            'servers' => $servers,
-            'states' => $states,
-            'search' => $q,
             'hasApiKey' => (string) (ShieldSetting::read('api_key_hash') ?? '') !== '',
             'panelUrl' => rtrim((string) config('app.url'), '/'),
             'myIp' => $request->ip(),
-            'batchLimit' => self::OPTIMIZE_BATCH_LIMIT,
         ]);
     }
 
@@ -89,8 +54,6 @@ class AdminController extends Controller
             'ban_minutes' => 'required|integer|min:1|max:10080',
             'ban_max_minutes' => 'required|integer|min:1|max:43200',
             'retention_days' => 'required|integer|min:1|max:365',
-            'heap_percent' => 'required|integer|min:60|max:95',
-            'default_profile' => 'required|in:' . implode(',', array_keys(OptimizationProfiles::all())),
             'whitelist' => 'nullable|string|max:5000',
         ]);
 
@@ -104,8 +67,6 @@ class AdminController extends Controller
             'ban_minutes' => $data['ban_minutes'],
             'ban_max_minutes' => max((int) $data['ban_minutes'], (int) $data['ban_max_minutes']),
             'retention_days' => $data['retention_days'],
-            'heap_percent' => $data['heap_percent'],
-            'default_profile' => $data['default_profile'],
             'whitelist' => implode("\n", $whitelist),
         ]);
 
@@ -276,110 +237,11 @@ class AdminController extends Controller
             ->with('antiddos:newkey', $key);
     }
 
-    public function optimize(Request $request): RedirectResponse
-    {
-        $data = $request->validate([
-            'profile' => 'required|in:' . implode(',', array_keys(OptimizationProfiles::all())),
-            'servers' => 'required|array|min:1',
-            'servers.*' => 'integer|min:1',
-            'view_distance' => 'nullable|integer|min:2|max:32',
-            'simulation_distance' => 'nullable|integer|min:2|max:32',
-            'entity_broadcast' => 'nullable|integer|min:10|max:100',
-            'collisions' => 'nullable|integer|min:0|max:8',
-            'mobs' => 'nullable|in:profile,reduced,minimum',
-            'heap_percent' => 'nullable|integer|min:60|max:95',
-        ]);
-
-        $options = array_filter([
-            'view_distance' => $data['view_distance'] ?? null,
-            'simulation_distance' => $data['simulation_distance'] ?? null,
-            'entity_broadcast' => $data['entity_broadcast'] ?? null,
-            'collisions' => $data['collisions'] ?? null,
-            'mobs' => $data['mobs'] ?? null,
-            'heap_percent' => $data['heap_percent'] ?? null,
-            'redstone' => $request->boolean('redstone'),
-            'no_treasure_maps' => $request->boolean('no_treasure_maps'),
-        ], fn ($v) => $v !== null && $v !== '' && $v !== false);
-
-        return $this->process($request, $data['servers'], function (Server $server) use ($request, $data, $options) {
-            return $this->optimizer->apply(
-                $server,
-                $data['profile'],
-                $request->boolean('flags'),
-                $request->boolean('files'),
-                $request->boolean('restart'),
-                $request->user()?->id,
-                $options
-            );
-        }, 'optimizados');
-    }
-
-    public function revert(Request $request): RedirectResponse
-    {
-        $data = $request->validate([
-            'servers' => 'required|array|min:1',
-            'servers.*' => 'integer|min:1',
-        ]);
-
-        return $this->process($request, $data['servers'], function (Server $server) use ($request) {
-            return $this->optimizer->revert($server, $request->boolean('restart'), $request->user()?->id);
-        }, 'revertidos');
-    }
-
     public function clearEvents(): RedirectResponse
     {
         ShieldEvent::query()->delete();
 
         return $this->tab('events')
             ->with('antiddos:success', 'Registro de eventos vaciado.');
-    }
-
-    /**
-     * Ejecuta una accion sobre varios servidores y deja un informe en sesion.
-     *
-     * @param array<int, int|string> $ids
-     * @param callable(Server): array{ok: array<int, string>, warn: array<int, string>} $action
-     */
-    protected function process(Request $request, array $ids, callable $action, string $verb): RedirectResponse
-    {
-        @set_time_limit(300);
-
-        $ids = array_slice(array_values(array_unique(array_map('intval', $ids))), 0, self::OPTIMIZE_BATCH_LIMIT);
-        $servers = Server::query()->with(['egg', 'nest', 'node'])->whereIn('id', $ids)->get();
-
-        $lines = [];
-        $done = 0;
-        $failed = 0;
-
-        foreach ($servers as $server) {
-            try {
-                $report = $action($server);
-            } catch (\Throwable $e) {
-                $failed++;
-                $lines[] = [$server->name, 'error', Str::limit($e->getMessage(), 200)];
-
-                continue;
-            }
-
-            $done++;
-
-            foreach ($report['ok'] as $msg) {
-                $lines[] = [$server->name, 'ok', $msg];
-            }
-
-            foreach ($report['warn'] as $msg) {
-                $lines[] = [$server->name, 'warn', $msg];
-            }
-        }
-
-        $message = sprintf('%d servidor(es) %s%s.', $done, $verb, $failed > 0 ? ", {$failed} con error" : '');
-
-        if (count($request->input('servers', [])) > self::OPTIMIZE_BATCH_LIMIT) {
-            $message .= sprintf(' Se procesaron solo los primeros %d; repite la operación para el resto o usa «antiddos optimize-server … --all» desde la consola.', self::OPTIMIZE_BATCH_LIMIT);
-        }
-
-        return $this->tab('optimize')
-            ->with($failed > 0 && $done === 0 ? 'antiddos:error' : 'antiddos:success', $message)
-            ->with('antiddos:report', array_slice($lines, 0, 120));
     }
 }

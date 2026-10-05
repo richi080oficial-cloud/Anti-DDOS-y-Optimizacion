@@ -41,24 +41,10 @@ return new class extends Migration
                 $table->timestamp('created_at')->useCurrent()->index();
             });
         }
-
-        if (!Schema::hasTable('antiddos_optimizations')) {
-            Schema::create('antiddos_optimizations', function (Blueprint $table) {
-                $table->increments('id');
-                $table->unsignedInteger('server_id')->unique();
-                $table->string('profile', 32);
-                $table->text('original_startup')->nullable();
-                $table->json('files')->nullable();
-                $table->timestamps();
-
-                $table->foreign('server_id')->references('id')->on('servers')->cascadeOnDelete();
-            });
-        }
     }
 
     public function down(): void
     {
-        Schema::dropIfExists('antiddos_optimizations');
         Schema::dropIfExists('antiddos_events');
         Schema::dropIfExists('antiddos_blocks');
         Schema::dropIfExists('antiddos_settings');

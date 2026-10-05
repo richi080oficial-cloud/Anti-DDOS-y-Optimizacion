@@ -29,19 +29,11 @@ return [
         // Lista blanca: una IP o CIDR por linea. Nunca se bloquean.
         'whitelist' => '',
 
-        // Registrar eventos (bloqueos, aplicaciones de optimizacion...).
+        // Registrar eventos (bloqueos, cambios de configuracion...).
         'log_events' => true,
 
         // Dias que se conservan los eventos.
         'retention_days' => 14,
-
-        // Perfil de optimizacion preseleccionado en el admin.
-        'default_profile' => 'balanced',
-
-        // Porcentaje de la RAM del servidor que se asigna al heap de Java al
-        // optimizar (el resto queda para metaspace, hilos y buffers nativos;
-        // si se asigna el 100 % Docker mata el contenedor por falta de memoria).
-        'heap_percent' => 90,
 
         // Firewall de los nodos, gestionado desde el panel. Vacio = "no gestionado":
         // el nodo conserva lo que tenga en su agent.conf. Al guardar el formulario

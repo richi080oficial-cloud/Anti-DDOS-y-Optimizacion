@@ -29,14 +29,5 @@ Route::middleware(['web', 'auth', AdminAuthenticate::class])
 
         Route::post('/apikey', [AdminController::class, 'rotateKey'])->name('apikey');
 
-        // Aplicar/revertir optimizaciones habla con Wings por cada servidor:
-        // se limita el ritmo de envios.
-        Route::post('/optimize', [AdminController::class, 'optimize'])
-            ->middleware('throttle:10,1')
-            ->name('optimize');
-        Route::post('/optimize/revert', [AdminController::class, 'revert'])
-            ->middleware('throttle:10,1')
-            ->name('optimize.revert');
-
         Route::delete('/events', [AdminController::class, 'clearEvents'])->name('events.clear');
     });

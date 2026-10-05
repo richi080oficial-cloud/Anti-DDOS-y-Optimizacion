@@ -5,46 +5,35 @@ namespace Pterodactyl\Extensions\AntiDDoS\Console\Commands;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
-use Pterodactyl\Extensions\AntiDDoS\Models\ServerOptimization;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldBlock;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldEvent;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldSetting;
 use Pterodactyl\Extensions\AntiDDoS\Services\AgentRegistry;
 use Pterodactyl\Extensions\AntiDDoS\Services\BlockManager;
 use Pterodactyl\Extensions\AntiDDoS\Services\IpMatcher;
-use Pterodactyl\Extensions\AntiDDoS\Services\OptimizationProfiles;
-use Pterodactyl\Extensions\AntiDDoS\Services\ServerOptimizer;
-use Pterodactyl\Models\Server;
 
 class ShieldCommand extends Command
 {
     protected $signature = 'antiddos:manage
-                            {action=info : info | apikey | purge | prune | feed | ban | unban | bans | whitelist | optimize}
-                            {args?* : Argumentos de la accion (IP, add|del|list, apply|revert|list...)}
+                            {action=info : info | apikey | purge | prune | feed | ban | unban | bans | whitelist}
+                            {args?* : Argumentos de la accion (IP, add|del|list)}
                             {--key= : Clave concreta a usar con la accion apikey}
                             {--if-missing : Con apikey, no hace nada si ya existe una clave}
                             {--force : No pedir confirmacion (necesario para purge)}
                             {--minutes= : Duracion del bloqueo en minutos (ban); vacio = permanente}
                             {--reason= : Motivo del bloqueo (ban)}
-                            {--profile= : Perfil de optimizacion (light|balanced|crowded)}
-                            {--server= : ID numerico o uuidShort del servidor a optimizar/revertir}
-                            {--all : Aplicar a todos los servidores de Minecraft}
-                            {--no-flags : No tocar el comando de arranque}
-                            {--no-files : No tocar los archivos de configuracion}
-                            {--restart : Reiniciar los servidores encendidos}
                             {--payload= : JSON del latido (lo envia el agente de nodo local)}';
 
     protected $description = 'Utilidades internas de Anti-DDoS y Optimización (usadas por el CLI antiddos).';
 
     protected const TABLES = [
         'antiddos_agents',
-        'antiddos_optimizations',
         'antiddos_events',
         'antiddos_blocks',
         'antiddos_settings',
     ];
 
-    public function handle(BlockManager $blocks, ServerOptimizer $optimizer): int
+    public function handle(BlockManager $blocks): int
     {
         $action = (string) $this->argument('action');
         $args = array_values((array) $this->argument('args'));
@@ -66,7 +55,6 @@ class ShieldCommand extends Command
             'unban' => $this->unban($blocks, $args),
             'bans' => $this->bans($blocks),
             'whitelist' => $this->whitelist($args),
-            'optimize' => $this->optimize($optimizer, $args),
             default => $this->unknown($action),
         };
     }
@@ -87,7 +75,6 @@ class ShieldCommand extends Command
         $this->table(['Metrica', 'Total'], [
             ['IPs bloqueadas ahora', (string) (new BlockManager())->active()->count()],
             ['Eventos registrados', (string) ShieldEvent::query()->count()],
-            ['Servidores optimizados', (string) ServerOptimization::query()->count()],
             ['Clave de API configurada', (string) (ShieldSetting::read('api_key_hash') ? 'si' : 'no')],
         ]);
 
@@ -121,7 +108,7 @@ class ShieldCommand extends Command
 
     protected function purge(): int
     {
-        if (!$this->option('force') && !$this->confirm('Se eliminaran TODAS las tablas de Anti-DDoS y Optimización. Las optimizaciones aplicadas a servidores NO se revierten. Continuar?', false)) {
+        if (!$this->option('force') && !$this->confirm('Se eliminaran TODAS las tablas de Anti-DDoS y Optimización. Continuar?', false)) {
             $this->line('Cancelado.');
 
             return self::SUCCESS;
@@ -257,104 +244,6 @@ class ShieldCommand extends Command
         $this->info($sub === 'add' ? "{$entry} anadida a la lista blanca." : "{$entry} quitada de la lista blanca.");
 
         return self::SUCCESS;
-    }
-
-    /** @param array<int, string> $args */
-    protected function optimize(ServerOptimizer $optimizer, array $args): int
-    {
-        $sub = (string) ($args[0] ?? 'list');
-
-        if ($sub === 'list') {
-            $this->table(['Perfil', 'Nombre', 'Descripcion'], collect(OptimizationProfiles::all())
-                ->map(fn (array $p, string $k) => [$k, $p['label'], Str::limit($p['description'], 80)])->values()->all());
-
-            $servers = $this->minecraftServers();
-            $states = ServerOptimization::query()->pluck('profile', 'server_id');
-
-            $this->table(['ID', 'Nombre', 'RAM (MiB)', 'Nodo', 'Optimizado'], $servers->map(fn (Server $s) => [
-                $s->id, Str::limit($s->name, 30), (string) $s->memory, $s->node->name ?? '-', $states[$s->id] ?? '-',
-            ])->all());
-
-            return self::SUCCESS;
-        }
-
-        if (!in_array($sub, ['apply', 'revert'], true)) {
-            $this->error('Uso: antiddos optimize-server list | apply --profile=P (--server=ID|--all) | revert (--server=ID|--all)');
-
-            return self::FAILURE;
-        }
-
-        $servers = $this->targetServers();
-
-        if ($servers->isEmpty()) {
-            $this->error('Indica --server=ID (o uuidShort) o --all. Usa "optimize-server list" para ver los servidores.');
-
-            return self::FAILURE;
-        }
-
-        $profile = (string) ($this->option('profile') ?: ShieldSetting::read('default_profile', OptimizationProfiles::DEFAULT));
-
-        if ($sub === 'apply' && OptimizationProfiles::get($profile) === null) {
-            $this->error("Perfil desconocido: {$profile} (usa light, balanced o crowded)");
-
-            return self::FAILURE;
-        }
-
-        $failed = 0;
-
-        foreach ($servers as $server) {
-            $this->line("<info>{$server->name}</info> (#{$server->id})");
-
-            try {
-                $report = $sub === 'apply'
-                    ? $optimizer->apply($server, $profile, !$this->option('no-flags'), !$this->option('no-files'), (bool) $this->option('restart'))
-                    : $optimizer->revert($server, (bool) $this->option('restart'));
-            } catch (\Throwable $e) {
-                $failed++;
-                $this->error('  Error: ' . $e->getMessage());
-
-                continue;
-            }
-
-            foreach ($report['ok'] as $msg) {
-                $this->line("  <info>✓</info> {$msg}");
-            }
-
-            foreach ($report['warn'] as $msg) {
-                $this->line("  <comment>!</comment> {$msg}");
-            }
-        }
-
-        return $failed > 0 ? self::FAILURE : self::SUCCESS;
-    }
-
-    /** @return \Illuminate\Support\Collection<int, Server> */
-    protected function minecraftServers()
-    {
-        /** @var ServerOptimizer $optimizer */
-        $optimizer = app(ServerOptimizer::class);
-
-        return Server::query()->with(['egg', 'nest', 'node'])->orderBy('name')->get()
-            ->filter(fn (Server $s) => $optimizer->isMinecraft($s))
-            ->values();
-    }
-
-    /** @return \Illuminate\Support\Collection<int, Server> */
-    protected function targetServers()
-    {
-        if ($this->option('all')) {
-            return $this->minecraftServers();
-        }
-
-        $id = (string) $this->option('server');
-
-        if ($id === '') {
-            return collect();
-        }
-
-        return Server::query()->with(['egg', 'nest', 'node'])
-            ->where(fn ($q) => ctype_digit($id) ? $q->where('id', (int) $id) : $q->where('uuidShort', $id))
-            ->get();
     }
 
     protected function unknown(string $action): int

@@ -2,7 +2,7 @@
   "name": "Anti-DDoS y Optimización",
   "identifier": "antiddos",
   "version": "1.1.0",
-  "description": "Anti-DDoS (firewall del nodo + escudo del panel) y optimizacion de servidores de Minecraft para Pterodactyl.",
+  "description": "Anti-DDoS para Pterodactyl: firewall del nodo (iptables/ipset) y escudo del panel, gestionados desde el panel de administracion.",
   "author": "Vexa Studio",
   "target": {
     "panel": ">=1.11.0 <2.0.0",
@@ -30,8 +30,6 @@
     "antiddos node-status",
     "antiddos fw",
     "antiddos attack-on",
-    "antiddos attack-off",
-    "antiddos optimize-host",
-    "antiddos optimize-server"
+    "antiddos attack-off"
   ]
 }

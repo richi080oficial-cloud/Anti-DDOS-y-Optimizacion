@@ -2,19 +2,17 @@
 
 Autor: **Vexa Studio**
 
-Anti-DDoS y optimización de servidores de Minecraft para Pterodactyl, en tres capas:
+Anti-DDoS para servidores de Minecraft en Pterodactyl, en dos capas:
 
 | Capa | Dónde se instala | Qué hace |
 | --- | --- | --- |
 | **Agente de nodo** (prioridad) | Cada máquina con **Wings** | Firewall `iptables` + `ipset` + `sysctl` que descarta SYN floods, UDP floods, paquetes malformados y limita las conexiones por IP **antes** de que gasten CPU. Recibe solo los bloqueos del panel. |
 | **Escudo web** | En el **panel** | Limita las peticiones por IP al panel y bloquea a quien se pasa (con duración creciente por reincidencia). Frena la fuerza bruta del login. Opcionalmente, límites en nginx. |
-| **Optimizador** | En el **panel** | Perfiles listos para Minecraft (banderas de la JVM de Aikar, distancias de simulación/visión, mobs, redstone…) que se aplican a los servidores con un clic y se **revierten** cuando quieras. También optimiza el sistema del nodo (swap, THP, BBR, límites de ficheros). |
 
-- Panel de administración propio: `/admin/extensions/antiddos` (resumen, escudo web, bloqueos, optimización, nodos, eventos).
+- Panel de administración propio: `/admin/extensions/antiddos` (estado, protección, bloqueos y eventos).
 - Comando `antiddos` con instalación, actualización, desinstalación y todo el control del firewall por consola.
 - **Estado de la instalación en el propio panel**: la pestaña *Estado* dice si está «todo instalado y funcionando» o qué falta (tablas, caché, clave, y el agente de **cada nodo**), con el comando que lo arregla. Los agentes informan al panel cada ~30 s.
 - **Firewall editable desde el admin**: puertos TCP/UDP (`25565:25666`), límites por IP y **modo «bajo ataque»** se cambian en la pestaña *Protección* y se envían a todos los nodos sin tocar la consola. Una vez guardados, el panel manda: un `antiddos fw set` manual en el nodo se sobrescribe en la siguiente sincronización.
-- **Optimización por pasos** (perfil → qué aplicar → servidores) con ajustes personalizables: distancia de visión y simulación, rango de entidades, cantidad de mobs, colisiones, redstone alternativa, mapas del tesoro y % de RAM para Java.
 - Los bloqueos del panel (manuales o automáticos) **se propagan a todos los nodos** en menos de un minuto.
 
 ## Qué puede y qué no puede parar (importante)
@@ -78,7 +76,7 @@ Qué hace el instalador del nodo (`scripts/node-agent.sh`):
 
 1. Instala `iptables`, `ipset` y `curl` si faltan.
 2. Copia el firewall a `/usr/local/sbin/antiddos-fw` y crea `/etc/antiddos/agent.conf` (se conserva en reinstalaciones).
-3. Crea y activa los servicios systemd: `antiddos-fw.service` (reglas al arrancar), `antiddos-sync.timer` (descarga bloqueos cada 30 s) y `antiddos-tune.service` (ajustes de rendimiento).
+3. Crea y activa los servicios systemd: `antiddos-fw.service` (reglas al arrancar), `antiddos-sync.timer` (descarga bloqueos cada 30 s).
 
 Si ya estaba instalado, el instalador del panel ofrece **Reinstalar** (no toca la base de datos), **Actualizar** o **Cancelar**, igual que ServerSplitter.
 
@@ -107,17 +105,11 @@ Si ya estaba instalado, el instalador del panel ofrece **Reinstalar** (no toca l
 | `sudo antiddos fw apply` / `remove` | Reaplica / quita todas las reglas |
 | `sudo antiddos fw set CLAVE VALOR` | Cambia un ajuste (luego `fw apply`) |
 | `sudo antiddos fw sync` | Descarga ya los bloqueos del panel |
-| `sudo antiddos optimize-host [status\|apply\|revert]` | Ajustes del sistema del nodo |
 | **Bloqueos** (firewall local y/o panel según lo que haya en la máquina) | |
 | `sudo antiddos ban 1.2.3.4 [minutos]` | Bloquea una IP (`0`/vacío = permanente) |
 | `sudo antiddos unban 1.2.3.4` | Desbloquea |
 | `sudo antiddos bans` | Lista los bloqueos activos |
 | `sudo antiddos whitelist add\|del\|list [IP\|CIDR]` | Lista blanca |
-| **Optimización de servidores** | |
-| `sudo antiddos optimize-server list` | Perfiles y servidores de Minecraft con su estado |
-| `sudo antiddos optimize-server apply --profile=balanced --server=12` | Aplica un perfil a un servidor (ID o uuidShort) |
-| `sudo antiddos optimize-server apply --profile=crowded --all --restart` | A todos, reiniciando los encendidos |
-| `sudo antiddos optimize-server revert --all` | Revierte la optimización |
 | **Nginx (panel)** | |
 | `sudo antiddos nginx-on [--rate=20 --burst=100 --conn=50]` | Límites de peticiones en nginx (capa 7) |
 | `sudo antiddos nginx-off` / `nginx-status` | Quita / muestra |
@@ -163,37 +155,11 @@ Los bloqueos automáticos se registran en el journal: `journalctl -k | grep ANTI
 
 Para cortar ataques HTTP **antes de PHP**, activa también los límites de nginx: `sudo antiddos nginx-on` (valida con `nginx -t` y se deshace solo si falla; se niega a activarse si detecta un proxy delante sin `set_real_ip_from`).
 
-## Optimización de servidores
-
-Perfiles (pestaña **Optimización** o `optimize-server`):
-
-| Perfil | Para quién | `view-distance` / `simulation-distance` |
-| --- | --- | --- |
-| `light` Ligero | Servidores pequeños; casi no cambia la jugabilidad | 10 / 8 |
-| `balanced` Equilibrado | La mayoría (10-40 jugadores) | 8 / 6 |
-| `crowded` Muchos jugadores | 40+ jugadores o poca CPU por jugador | 6 / 4 |
-
-Qué se cambia:
-
-1. **Comando de arranque** (`servers.startup`): banderas de la JVM de Aikar y `-Xms`/`-Xmx` = el 90 % de la RAM del servidor (configurable, para que Docker no mate el contenedor por memoria nativa). Solo si el comando tiene la forma `java … -jar …`; conserva las propiedades `-D…` existentes.
-2. **Archivos** (vía Wings): `server.properties`, `spigot.yml`, `bukkit.yml` y `config/paper-world-defaults.yml` (distancias, rango de actividad y seguimiento de entidades, límites de mobs, explosiones, redstone alternativa en `crowded`…).
-
-Seguridad:
-
-- **Solo se modifican claves que ya existen** en cada archivo (nunca se inventan claves que tu versión no tenga).
-- Antes de tocar un archivo se guarda `<archivo>.antiddos.bak` en el propio servidor; el comando de arranque original se guarda en la base de datos. **Revertir** restaura ambos.
-- Al reescribir los YAML se pierden los comentarios del archivo (por eso existe la copia). Los `.properties` conservan comentarios y orden.
-- Si un archivo aún no existe (servidor que nunca arrancó), se omite: vuelve a aplicar el perfil tras el primer arranque.
-- Los cambios surten efecto al reiniciar el servidor (`--restart` / casilla «Reiniciar» lo hace por ti si estaba encendido).
-
-Optimización del sistema del nodo (`sudo antiddos optimize-host apply`): `vm.swappiness=10`, THP en `madvise`, governor `performance` (si existe), BBR + `fq`, buffers de red, `fs.file-max` y `LimitNOFILE` de Wings (reinicia Wings para que el límite surta efecto). `optimize-host revert` quita los archivos.
-
 ## Desinstalación
 
     sudo antiddos uninstall               # conserva las tablas
     sudo antiddos uninstall --drop-data   # y las borra
 
-Quita la extensión, el parche del menú, el provider, el agente de nodo (reglas, servicios, sets), los límites de nginx, el cron y el comando. **Las optimizaciones ya aplicadas a servidores no se revierten solas**: usa antes `sudo antiddos optimize-server revert --all`.
 
 ## Solución de problemas
 

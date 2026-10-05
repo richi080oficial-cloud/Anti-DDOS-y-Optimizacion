@@ -58,11 +58,6 @@
         .ad .f-row { display: flex; flex-wrap: wrap; gap: 14px; } .ad .f-row .f { flex: 1 1 180px; min-width: 0; }
         .ad .check { display: flex; align-items: flex-start; gap: 9px; margin: 8px 0; font-weight: normal; cursor: pointer; }
         .ad .check input { margin: 3px 0 0; } .ad .check span small { display: block; opacity: .7; }
-        .ad .profiles { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 8px; }
-        .ad .profile { flex: 1 1 230px; border: 2px solid var(--line); border-radius: 6px; padding: 12px 14px; cursor: pointer; display: block; font-weight: normal; margin: 0; }
-        .ad .profile.sel { border-color: var(--pri); box-shadow: 0 0 0 1px var(--pri); }
-        .ad .profile b { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 15px; }
-        .ad .chips span { display: inline-block; margin: 6px 6px 0 0; padding: 1px 8px; border-radius: 10px; font-size: 12px; background: rgba(127,127,127,.18); }
         .ad .table { width: 100%; color: inherit; background: transparent; margin: 0; }
         .ad .table > thead > tr > th, .ad .table > tbody > tr > td { border-color: var(--line); vertical-align: middle; padding: 8px; }
         .ad .tw { overflow-x: auto; }
@@ -108,7 +103,6 @@
             <li><a data-tab="status">Estado</a></li>
             <li><a data-tab="shield">Protección</a></li>
             <li><a data-tab="blocks">Bloqueos ({{ $blocks->count() }})</a></li>
-            <li><a data-tab="optimize">Optimización</a></li>
             <li><a data-tab="events">Eventos</a></li>
         </ul>
 
@@ -298,15 +292,6 @@
                         <div class="f-row" style="margin-top:12px;">
                             <div class="f"><label for="retention_days">Días que se guardan los eventos</label>
                                 <input class="form-control" type="number" id="retention_days" name="retention_days" min="1" max="365" value="{{ old('retention_days', $settings['retention_days']) }}"></div>
-                            <div class="f"><label for="heap_percent">% de RAM para Java (optimización)</label>
-                                <input class="form-control" type="number" id="heap_percent" name="heap_percent" min="60" max="95" value="{{ old('heap_percent', $settings['heap_percent']) }}">
-                                <small>El resto queda para memoria nativa; al 100 % Docker mata el servidor.</small></div>
-                            <div class="f"><label for="default_profile">Perfil preseleccionado</label>
-                                <select class="form-control" id="default_profile" name="default_profile">
-                                    @foreach ($profiles as $key => $profile)
-                                        <option value="{{ $key }}" {{ old('default_profile', $settings['default_profile']) === $key ? 'selected' : '' }}>{{ $profile['label'] }}</option>
-                                    @endforeach
-                                </select></div>
                         </div>
                         <label class="check"><input type="checkbox" name="log_events" value="1" {{ $settings['log_events'] ? 'checked' : '' }}><span>Registrar eventos</span></label>
                     </details>
@@ -364,147 +349,6 @@
             </div>
         </div>
 
-        {{-- ═══════════════════════ OPTIMIZACIÓN ═══════════════════════ --}}
-        <div class="pane" id="pane-optimize">
-            @if (session('antiddos:report'))
-                <div class="card">
-                    <div class="card-h"><h3>Informe de la última operación</h3></div>
-                    <div class="card-b">
-                        @foreach (session('antiddos:report') as [$serverName, $level, $message])
-                            <div class="row-i"><span class="dot {{ $level === 'ok' ? 'ok' : ($level === 'warn' ? 'warn' : 'error') }}"></span>
-                                <div class="body"><b>{{ $serverName }}</b><span class="muted">{{ $message }}</span></div></div>
-                        @endforeach
-                    </div>
-                </div>
-            @endif
-
-            <form action="{{ route('admin.extensions.antiddos.optimize') }}" method="POST" id="ad-opt">
-                @csrf
-
-                <div class="card">
-                    <div class="card-h"><h3>1 · Elige un perfil</h3></div>
-                    <div class="card-b">
-                        <div class="profiles">
-                            @foreach ($profiles as $key => $profile)
-                                <label class="profile {{ $settings['default_profile'] === $key ? 'sel' : '' }}">
-                                    <b><input type="radio" name="profile" value="{{ $key }}" {{ $settings['default_profile'] === $key ? 'checked' : '' }}> {{ $profile['label'] }}</b>
-                                    <span class="muted">{{ $profile['description'] }}</span>
-                                    <div class="chips">
-                                        <span>visión {{ $profile['properties']['view-distance'] }}</span>
-                                        <span>simulación {{ $profile['properties']['simulation-distance'] }}</span>
-                                        <span>monstruos {{ $profile['bukkit']['spawn-limits.monsters'] ?? '—' }}</span>
-                                    </div>
-                                </label>
-                            @endforeach
-                        </div>
-                        <details>
-                            <summary>Comparar los perfiles</summary>
-                            <div class="tw" style="margin-top:10px;"><table class="table">
-                                <thead><tr><th>Ajuste</th>@foreach ($profiles as $profile)<th>{{ $profile['label'] }}</th>@endforeach</tr></thead>
-                                <tbody>
-                                @foreach ([
-                                    'Distancia de visión' => ['properties', 'view-distance'],
-                                    'Distancia de simulación' => ['properties', 'simulation-distance'],
-                                    'Rango de envío de entidades (%)' => ['properties', 'entity-broadcast-range-percentage'],
-                                    'Límite de monstruos' => ['bukkit', 'spawn-limits.monsters'],
-                                    'Límite de animales' => ['bukkit', 'spawn-limits.animals'],
-                                    'Rango de aparición de mobs' => ['spigot', 'world-settings.default.mob-spawn-range'],
-                                    'Actividad de monstruos (bloques)' => ['spigot', 'world-settings.default.entity-activation-range.monsters'],
-                                    'Colisiones máx. por entidad' => ['paper_world', 'collisions.max-entity-collisions'],
-                                ] as $label => [$section, $key])
-                                    <tr><td>{{ $label }}</td>@foreach ($profiles as $profile)<td>{{ $profile[$section][$key] ?? '—' }}</td>@endforeach</tr>
-                                @endforeach
-                                </tbody></table></div>
-                            <p class="muted small" style="margin:8px 0 0;">«—» = ese perfil no toca ese ajuste. Solo se cambian claves que ya existen en los archivos de cada servidor.</p>
-                        </details>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <div class="card-h"><h3>2 · Qué aplicar</h3></div>
-                    <div class="card-b">
-                        <label class="check"><input type="checkbox" name="flags" value="1" checked>
-                            <span>Mejorar el arranque de Java <small>Banderas de la JVM (Aikar) y memoria proporcional a la RAM del servidor. Reduce los tirones del recolector de basura.</small></span></label>
-                        <label class="check"><input type="checkbox" name="files" value="1" checked>
-                            <span>Optimizar los archivos del servidor <small>server.properties, spigot.yml, bukkit.yml y paper-world-defaults.yml. Se guarda una copia para poder revertir.</small></span></label>
-                        <label class="check"><input type="checkbox" name="restart" value="1">
-                            <span>Reiniciar los servidores encendidos <small>Para que surta efecto ya. Si no, se aplica en el próximo reinicio.</small></span></label>
-
-                        <details>
-                            <summary>Personalizar (opcional)</summary>
-                            <p class="muted small" style="margin:10px 0;">Lo que rellenes aquí tiene prioridad sobre el perfil. Déjalo vacío para usar los valores del perfil.</p>
-                            <div class="f-row">
-                                <div class="f"><label for="view_distance">Distancia de visión</label>
-                                    <input class="form-control" type="number" id="view_distance" name="view_distance" min="2" max="32" placeholder="Según perfil"><small>Chunks que ve cada jugador. La opción que más CPU ahorra.</small></div>
-                                <div class="f"><label for="simulation_distance">Distancia de simulación</label>
-                                    <input class="form-control" type="number" id="simulation_distance" name="simulation_distance" min="2" max="32" placeholder="Según perfil"><small>Chunks donde se simulan mobs y cultivos.</small></div>
-                                <div class="f"><label for="entity_broadcast">Rango de entidades (%)</label>
-                                    <input class="form-control" type="number" id="entity_broadcast" name="entity_broadcast" min="10" max="100" placeholder="Según perfil"><small>Menos % = menos tráfico por jugador.</small></div>
-                                <div class="f"><label for="collisions">Colisiones máx. por entidad</label>
-                                    <input class="form-control" type="number" id="collisions" name="collisions" min="0" max="8" placeholder="Según perfil"><small>Paper. 2 reduce mucho la carga en granjas.</small></div>
-                            </div>
-                            <div class="f-row">
-                                <div class="f"><label for="mobs">Cantidad de mobs</label>
-                                    <select class="form-control" id="mobs" name="mobs">
-                                        <option value="profile">Según perfil</option>
-                                        <option value="reduced">Reducida</option>
-                                        <option value="minimum">Mínima</option>
-                                    </select><small>Límites de aparición y rango de spawn.</small></div>
-                                <div class="f"><label for="heap_percent_opt">% de RAM para Java</label>
-                                    <input class="form-control" type="number" id="heap_percent_opt" name="heap_percent" min="60" max="95" placeholder="{{ $settings['heap_percent'] }}"><small>Por defecto el de la pestaña Protección.</small></div>
-                            </div>
-                            <label class="check"><input type="checkbox" name="redstone" value="1"><span>Redstone alternativa (Alternate Current) <small>Mucho más rápida; puede alterar circuitos muy técnicos.</small></span></label>
-                            <label class="check"><input type="checkbox" name="no_treasure_maps" value="1"><span>Desactivar mapas del tesoro <small>Evita generar chunks lejanos al explorar.</small></span></label>
-                        </details>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <div class="card-h"><h3>3 · Elige los servidores</h3><span class="muted small" id="ad-count">0 seleccionados</span></div>
-                    <div class="card-b">
-                        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; align-items:center;">
-                            <input type="text" id="ad-filter" class="form-control" style="max-width:240px;" placeholder="Buscar servidor…">
-                            <select id="ad-node" class="form-control" style="max-width:200px;">
-                                <option value="">Todos los nodos</option>
-                                @foreach ($servers->pluck('node.name')->filter()->unique()->sort() as $nodeName)
-                                    <option value="{{ \Illuminate\Support\Str::lower($nodeName) }}">{{ $nodeName }}</option>
-                                @endforeach
-                            </select>
-                            <label class="check" style="margin:0;"><input type="checkbox" id="ad-only-new"><span>Solo sin optimizar</span></label>
-                            <button type="button" class="btn btn-default" id="ad-all">Marcar visibles</button>
-                            <button type="button" class="btn btn-default" id="ad-none">Quitar marcas</button>
-                        </div>
-                        <div class="tw">
-                            <table class="table" id="ad-servers">
-                                <thead><tr><th style="width:30px;"></th><th>Servidor</th><th>Tipo</th><th>Nodo</th><th>RAM</th><th>Optimización</th></tr></thead>
-                                <tbody>
-                                @forelse ($servers as $server)
-                                    @php($state = $states[$server->id] ?? null)
-                                    <tr data-name="{{ \Illuminate\Support\Str::lower($server->name . ' ' . ($server->egg->name ?? '')) }}" data-node="{{ \Illuminate\Support\Str::lower($server->node->name ?? '') }}" data-opt="{{ $state ? 1 : 0 }}">
-                                        <td><input type="checkbox" name="servers[]" value="{{ $server->id }}" class="ad-srv"></td>
-                                        <td><a href="{{ route('admin.servers.view', $server->id) }}">{{ $server->name }}</a></td>
-                                        <td>{{ $server->egg->name ?? '—' }}</td>
-                                        <td>{{ $server->node->name ?? '—' }}</td>
-                                        <td>{{ $server->memory > 0 ? $server->memory . ' MiB' : 'ilimitada' }}</td>
-                                        <td>@if ($state)<span class="pill ok">{{ $profiles[$state->profile]['label'] ?? $state->profile }}</span> <span class="muted small">{{ $state->updated_at->diffForHumans() }}</span>@else<span class="muted">Sin optimizar</span>@endif</td>
-                                    </tr>
-                                @empty
-                                    <tr><td colspan="6" class="muted">No se encontraron servidores de Minecraft.</td></tr>
-                                @endforelse
-                                </tbody>
-                            </table>
-                        </div>
-                        <p class="muted small" style="margin:10px 0 0;">Hasta {{ $batchLimit }} servidores por envío. Para todos a la vez: <code>sudo antiddos optimize-server apply --profile=balanced --all</code></p>
-                    </div>
-                    <div class="card-f">
-                        <button type="submit" class="btn btn-success">Aplicar a los seleccionados</button>
-                        <button type="submit" class="btn btn-default" formaction="{{ route('admin.extensions.antiddos.optimize.revert') }}"
-                                onclick="return confirm('¿Revertir la optimización de los servidores marcados? Se restaurarán el comando de arranque y los archivos originales.');">Revertir los seleccionados</button>
-                    </div>
-                </div>
-            </form>
-        </div>
-
         {{-- ═══════════════════════ EVENTOS ═══════════════════════ --}}
         <div class="pane" id="pane-events">
             <div class="card">
@@ -520,7 +364,7 @@
                         @forelse ($events as $event)
                             <tr>
                                 <td style="white-space:nowrap;">{{ $event->created_at->format('Y-m-d H:i:s') }}</td>
-                                <td><span class="pill {{ in_array($event->type, ['auto-ban', 'ban', 'attack'], true) ? 'error' : (in_array($event->type, ['optimize', 'optimize-revert'], true) ? 'ok' : '') }}">{{ $event->type }}</span></td>
+                                <td><span class="pill {{ in_array($event->type, ['auto-ban', 'ban', 'attack'], true) ? 'error' : '' }}">{{ $event->type }}</span></td>
                                 <td>{{ $event->ip ?: '—' }}</td>
                                 <td>{{ $event->message }}</td>
                             </tr>
@@ -563,40 +407,6 @@
                 });
             });
 
-            // Perfiles
-            $$('.profile input').forEach(function (r) {
-                r.addEventListener('change', function () {
-                    $$('.profile').forEach(function (p) { p.classList.toggle('sel', $('input', p).checked); });
-                });
-            });
-
-            // Lista de servidores: filtros y seleccion
-            var rows = $$('#ad-servers tbody tr[data-name]');
-            var count = $('#ad-count');
-            function refresh() { if (count) { count.textContent = $$('.ad-srv:checked').length + ' seleccionados'; } }
-            function filter() {
-                var q = ($('#ad-filter').value || '').toLowerCase().trim();
-                var node = $('#ad-node').value;
-                var onlyNew = $('#ad-only-new').checked;
-                rows.forEach(function (tr) {
-                    var ok = (!q || tr.getAttribute('data-name').indexOf(q) !== -1)
-                          && (!node || tr.getAttribute('data-node') === node)
-                          && (!onlyNew || tr.getAttribute('data-opt') === '0');
-                    tr.style.display = ok ? '' : 'none';
-                });
-            }
-            if ($('#ad-filter')) {
-                ['input', 'change'].forEach(function (ev) {
-                    $('#ad-filter').addEventListener(ev, filter);
-                    $('#ad-node').addEventListener(ev, filter);
-                    $('#ad-only-new').addEventListener(ev, filter);
-                });
-                $('#ad-all').addEventListener('click', function () {
-                    rows.forEach(function (tr) { if (tr.style.display !== 'none') { $('.ad-srv', tr).checked = true; } }); refresh();
-                });
-                $('#ad-none').addEventListener('click', function () { $$('.ad-srv').forEach(function (c) { c.checked = false; }); refresh(); });
-                $$('.ad-srv').forEach(function (c) { c.addEventListener('change', refresh); });
-            }
         })();
     </script>
 @endsection

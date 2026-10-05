@@ -16,7 +16,6 @@ set -Eeuo pipefail
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SBIN_FW="/usr/local/sbin/antiddos-fw"
-SBIN_TUNE="/usr/local/sbin/antiddos-tune"
 CONF_DIR="/etc/antiddos"
 CONF="${CONF_DIR}/agent.conf"
 UNIT_DIR="/etc/systemd/system"
@@ -148,20 +147,16 @@ AccuracySec=5s
 [Install]
 WantedBy=timers.target
 EOF
+}
 
-    cat > "${UNIT_DIR}/antiddos-tune.service" <<EOF
-[Unit]
-Description=Anti-DDoS y Optimización: ajustes de rendimiento del sistema (THP, governor)
-After=local-fs.target
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=${SBIN_TUNE} runtime
-
-[Install]
-WantedBy=multi-user.target
-EOF
+# Versiones anteriores instalaban un servicio "antiddos-tune" (THP, governor y
+# ajustes de sistema). Esa funcion se ha eliminado: se limpia si existe.
+remove_legacy_tune() {
+    systemctl disable --now antiddos-tune.service >/dev/null 2>&1 || true
+    rm -f "${UNIT_DIR}/antiddos-tune.service" /usr/local/sbin/antiddos-tune \
+          /etc/sysctl.d/97-antiddos-tune.conf /etc/security/limits.d/97-antiddos.conf \
+          /etc/systemd/system/wings.service.d/antiddos.conf
+    rmdir /etc/systemd/system/wings.service.d 2>/dev/null || true
 }
 
 do_install() {
@@ -172,8 +167,7 @@ do_install() {
 
     info "Instalando el firewall en ${SBIN_FW}…"
     install -m 0755 "${SOURCE_DIR}/scripts/antiddos-fw.sh" "$SBIN_FW"
-    install -m 0755 "${SOURCE_DIR}/scripts/optimize-host.sh" "$SBIN_TUNE"
-    sed -i 's/\r$//' "$SBIN_FW" "$SBIN_TUNE"
+    sed -i 's/\r$//' "$SBIN_FW"
     mkdir -p "$CONF_DIR"
     tr -d '[:space:]' < "${SOURCE_DIR}/VERSION" > "${CONF_DIR}/version" 2>/dev/null || echo desconocida > "${CONF_DIR}/version"
 
@@ -211,12 +205,12 @@ do_install() {
         "$SBIN_FW" set SSH_PORT "$ssh_detected" >/dev/null
     fi
 
+    remove_legacy_tune
     write_units
     systemctl daemon-reload
-    systemctl enable antiddos-fw.service antiddos-sync.timer antiddos-tune.service >/dev/null 2>&1 || true
+    systemctl enable antiddos-fw.service antiddos-sync.timer >/dev/null 2>&1 || true
     systemctl restart antiddos-fw.service
     systemctl restart antiddos-sync.timer
-    systemctl restart antiddos-tune.service || warn "No se pudieron aplicar todos los ajustes de rendimiento (se ignora)."
 
     ok "Agente de nodo instalado y activo."
     echo
@@ -228,13 +222,12 @@ do_install() {
 
 do_uninstall() {
     info "Desinstalando el agente de nodo…"
-    systemctl disable --now antiddos-sync.timer antiddos-fw.service antiddos-tune.service >/dev/null 2>&1 || true
+    systemctl disable --now antiddos-sync.timer antiddos-fw.service >/dev/null 2>&1 || true
     [[ -x "$SBIN_FW" ]] && "$SBIN_FW" remove || true
     rm -f "${UNIT_DIR}"/antiddos-fw.service "${UNIT_DIR}"/antiddos-sync.service \
-          "${UNIT_DIR}"/antiddos-sync.timer "${UNIT_DIR}"/antiddos-tune.service
+          "${UNIT_DIR}"/antiddos-sync.timer
     systemctl daemon-reload
-    [[ -x "$SBIN_TUNE" ]] && "$SBIN_TUNE" revert || true
-    rm -f "$SBIN_FW" "$SBIN_TUNE"
+    rm -f "$SBIN_FW"
     # La configuración (puertos, clave, lista blanca) se conserva por si se reinstala.
     ok "Agente de nodo eliminado. Configuración conservada en ${CONF_DIR} (bórrala si no la quieres)."
 }

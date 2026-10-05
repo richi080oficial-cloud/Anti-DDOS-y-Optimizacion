@@ -29,7 +29,6 @@ CRON_MARKER="antiddos-autoupdate"
 LOG_FILE="/var/log/antiddos-update.log"
 TARGET_REL="app/Extensions/AntiDDoS"
 FW_BIN="/usr/local/sbin/antiddos-fw"
-TUNE_BIN="/usr/local/sbin/antiddos-tune"
 
 PANEL_DIR="${PANEL_DIR:-}"
 WEB_USER="${WEB_USER:-}"
@@ -199,7 +198,7 @@ install_menu() {
     echo
     echo "  1) Reinstalar  — vuelve a copiar todos los archivos y parches del panel."
     echo "                   NO se toca la base de datos: ajustes, bloqueos, lista"
-    echo "                   blanca, optimizaciones y la clave de la API se conservan."
+    echo "                   blanca y la clave de la API se conservan."
     echo "  2) Actualizar  — descarga la última versión del repositorio y la instala."
     echo "  3) Cancelar    — no hacer nada."
     echo
@@ -299,7 +298,6 @@ do_uninstall() {
     else
         info "Las tablas de la base de datos se conservan (añade --drop-data para borrarlas)."
     fi
-    warn "Las optimizaciones ya aplicadas a servidores (server.properties, flags de arranque) NO se revierten solas: usa 'optimize-server revert' antes."
     if [[ "$FORCE" != "1" && -t 0 ]]; then
         read -r -p "¿Continuar? [s/N] " answer
         [[ "$answer" =~ ^([sS]|[yY]|si|SI|sí|SÍ)$ ]] || { info "Cancelado."; return; }
@@ -435,20 +433,6 @@ do_whitelist() {
     esac
 }
 
-# ── Optimización ──────────────────────────────────────────────────────────────
-do_optimize_host() {
-    local sub="${1:-status}"
-    local tune="$TUNE_BIN"
-    [[ -x "$tune" ]] || tune="$SRC_DIR/scripts/optimize-host.sh"
-    if [[ ! -f "$tune" ]]; then sync_sources; tune="$SRC_DIR/scripts/optimize-host.sh"; fi
-    bash "$tune" "$sub"
-}
-
-do_optimize_server() {
-    require_panel
-    run_installer artisan optimize "${PASSTHRU[@]}"
-}
-
 do_nginx() {
     [[ -f "$SRC_DIR/scripts/nginx-shield.sh" ]] || sync_sources
     bash "$SRC_DIR/scripts/nginx-shield.sh" "$1" "${PASSTHRU[@]}"
@@ -517,7 +501,7 @@ Anti-DDoS y Optimización — anti-DDoS y optimización para Pterodactyl
 TODO EN UNO (panel y Wings en la misma máquina)
   install-all [--tcp=25565 --udp=19132]   Instala panel + firewall del nodo; la clave se gestiona sola
 
-PANEL (extensión + escudo web + optimizador de servidores)
+PANEL (extensión + escudo web)
   install               Instala la extensión en el panel
                         (si ya está instalada, ofrece reinstalar o actualizar)
   reinstall             Reinstala todos los archivos SIN tocar la base de datos
@@ -528,7 +512,6 @@ PANEL (extensión + escudo web + optimizador de servidores)
   apikey [--key=X]      Genera (o fija) la clave de la API que usan los nodos
   info                  Configuración y estadísticas actuales
   prune                 Limpia bloqueos caducados y eventos antiguos
-  optimize-server ...   Optimiza servidores de Minecraft (ver abajo)
   nginx-on [--rate=20 --burst=100 --conn=50]   Límites de peticiones en nginx (capa 7)
   nginx-off | nginx-status
 
@@ -540,19 +523,12 @@ NODO (firewall anti-DDoS contra ataques a los servidores de Minecraft)
   fw <acción>           apply | remove | status | top | sync | set CLAVE VALOR  (ver 'antiddos fw help')
   attack-on             Modo "bajo ataque": límites mucho más estrictos
   attack-off            Vuelve a los límites normales
-  optimize-host [status|apply|revert]   Ajustes del sistema (swap, THP, BBR, ficheros…)
 
 BLOQUEOS (firewall local y/o panel, según lo que haya en esta máquina)
   ban <IP> [minutos]    Bloquea una IP (0 = permanente)
   unban <IP>            Desbloquea
   bans                  Lista los bloqueos activos
   whitelist add|del|list [IP|CIDR]
-
-OPTIMIZAR SERVIDORES
-  optimize-server list                          Perfiles y servidores optimizables
-  optimize-server apply --profile=PERFIL [--server=ID|--all] [--no-flags] [--no-files] [--restart]
-  optimize-server revert [--server=ID|--all]
-  Perfiles: light | balanced | crowded    (crowded = muchos jugadores)
 
 OTROS
   autoupdate-on         Programa la actualización automática diaria (04:00)
@@ -572,14 +548,13 @@ Ejemplos:
   bash <(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/Anti-DDOS-y-Optimizacion/main/install.sh) install-all
   sudo antiddos node-install --tcp=25565:25600 --udp=19132 --panel-url=https://panel.midominio.com --key=XXXX
   sudo antiddos attack-on
-  sudo antiddos optimize-server apply --profile=crowded --all --restart
 EOF
 }
 
 ACTION="${1:-help}"
 shift || true
 
-# Argumentos posicionales (ban/unban/whitelist/fw/optimize-*) y opciones.
+# Argumentos posicionales (ban/unban/whitelist/fw) y opciones.
 POS=()
 for arg in "$@"; do
     case "$arg" in
@@ -623,8 +598,6 @@ case "$ACTION" in
     unban)                  do_unban "${POS[0]:-}" ;;
     bans)                   do_bans ;;
     whitelist|white)        do_whitelist "${POS[0]:-list}" "${POS[1]:-}" ;;
-    optimize-host)          do_optimize_host "${POS[0]:-status}" ;;
-    optimize-server)        do_optimize_server ;;
     nginx-on)               do_nginx on ;;
     nginx-off)              do_nginx off ;;
     nginx-status)           do_nginx status ;;
