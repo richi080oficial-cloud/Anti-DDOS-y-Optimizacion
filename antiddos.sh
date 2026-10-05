@@ -12,9 +12,14 @@
 #
 set -Eeuo pipefail
 
-REPO_URL="${REPO_URL:-${ANTIDDOS_REPO:-https://github.com/richi080oficial-cloud/Anti-DDOS-y-Optimizacion.git}}"
 REPO_BRANCH="${REPO_BRANCH:-main}"
 SRC_DIR="${SRC_DIR:-/opt/antiddos}"
+# Si el codigo ya esta clonado (p. ej. por SSH con una deploy key en un repo
+# privado) se conserva su "origin" en vez de volver a la URL https publica.
+if [[ -z "${REPO_URL:-}" && -z "${ANTIDDOS_REPO:-}" && -d "$SRC_DIR/.git" ]]; then
+    REPO_URL="$(git -C "$SRC_DIR" remote get-url origin 2>/dev/null || true)"
+fi
+REPO_URL="${REPO_URL:-${ANTIDDOS_REPO:-https://github.com/richi080oficial-cloud/Anti-DDOS-y-Optimizacion.git}}"
 INSTALLER_REL="scripts/addon-install.sh"
 NODE_REL="scripts/node-agent.sh"
 STATE_DIR="/usr/local/share/antiddos"
