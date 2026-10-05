@@ -77,6 +77,10 @@
         .ad .chart-wrap { position: relative; width: 100%; }
         .ad #ad-chart { width: 100%; height: 320px; display: block; }
         .ad .tip { position: absolute; pointer-events: none; display: none; z-index: 5; padding: 8px 10px; border-radius: 6px; font-size: 12px; line-height: 1.5; background: rgba(20,20,20,.92); color: #fff; white-space: nowrap; }
+        .ad .ctrl-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-bottom: 12px; }
+        .ad .ctrl-row label { margin: 0; font-weight: normal; font-size: 12px; display: flex; flex-direction: column; gap: 3px; opacity: .9; }
+        .ad .kpi .l i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+        .ad .kpi .sub { font-size: 11px; opacity: .65; margin-top: 2px; }
         .ad .legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; }
         .ad .legend label { display: inline-flex; align-items: center; gap: 6px; margin: 0; font-weight: normal; cursor: pointer; }
         .ad .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; }
@@ -352,12 +356,13 @@
         <div class="pane" id="pane-traffic">
             <div class="card">
                 <div class="card-h">
-                    <h3>Tráfico hacia tus servidores</h3>
+                    <h3>Tráfico de red</h3>
                     <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
-                        <select id="ad-host" class="form-control" style="width:auto;">
-                            <option value="">Todos los nodos</option>
-                            @foreach ($metricsHosts as $h)<option value="{{ $h }}">{{ $h }}</option>@endforeach
-                        </select>
+                        <div class="seg" id="ad-view">
+                            <button type="button" data-v="network" class="on">Red (↓ RX / ↑ TX)</button>
+                            <button type="button" data-v="packets">Paquetes</button>
+                            <button type="button" data-v="reasons">Motivos de frenado</button>
+                        </div>
                         <div class="seg" id="ad-range">
                             <button type="button" data-r="live" class="on">En vivo</button>
                             <button type="button" data-r="1h">1 h</button>
@@ -365,36 +370,48 @@
                             <button type="button" data-r="24h">24 h</button>
                             <button type="button" data-r="7d">7 días</button>
                         </div>
+                        <select id="ad-host" class="form-control" style="width:auto;">
+                            <option value="">Todos los nodos</option>
+                            @foreach ($metricsHosts as $h)<option value="{{ $h }}">{{ $h }}</option>@endforeach
+                        </select>
                     </div>
                 </div>
                 <div class="card-b">
-                    <div class="kpis">
-                        <div class="kpi"><div class="n" id="k-dropped" style="color:var(--err)">—</div><div class="l">Frenados en el periodo</div></div>
-                        <div class="kpi"><div class="n" id="k-peak">—</div><div class="l">Pico de frenados / min</div></div>
-                        <div class="kpi"><div class="n" id="k-syn" style="color:var(--pri)">—</div><div class="l">Conexiones nuevas</div></div>
-                        <div class="kpi"><div class="n" id="k-tcp" style="color:var(--ok)">—</div><div class="l">TCP recibidos</div></div>
-                        <div class="kpi"><div class="n" id="k-udp" style="color:var(--warn)">—</div><div class="l">UDP recibidos</div></div>
-                        <div class="kpi"><div class="n" id="k-bans">—</div><div class="l">IPs bloqueadas ahora</div></div>
+                    <div class="ctrl-row">
+                        <label>Unidad <select id="ad-unit" class="form-control input-sm"></select></label>
+                        <label>Suavizado
+                            <select id="ad-smooth" class="form-control input-sm">
+                                <option value="1">Ninguno (dato real)</option>
+                                <option value="5">Suave (media de 5 puntos)</option>
+                                <option value="15">Muy suave (15 puntos)</option>
+                            </select></label>
+                        <label>Escala
+                            <select id="ad-scale" class="form-control input-sm">
+                                <option value="lin">Lineal</option>
+                                <option value="log">Logarítmica (ver ataques y calma a la vez)</option>
+                            </select></label>
+                        <button type="button" class="btn btn-sm btn-default" id="ad-pause">⏸ Pausar</button>
+                        <button type="button" class="btn btn-sm btn-default" id="ad-csv">⬇ CSV</button>
                     </div>
-                    <div id="ad-live" class="small" style="margin:0 0 8px;"></div>
+                    <div id="ad-live" class="small" style="margin:0 0 10px;"></div>
+                    <div class="kpis" id="ad-stats"></div>
                     <div class="chart-wrap">
                         <canvas id="ad-chart"></canvas>
                         <div class="tip" id="ad-tip"></div>
                     </div>
-                    <div class="legend" id="ad-legend">
-                        <label><input type="checkbox" data-s="dropped" checked><i style="background:#dd4b39"></i> Frenados</label>
-                        <label><input type="checkbox" data-s="syn" checked><i style="background:#3c8dbc"></i> Conexiones nuevas</label>
-                        <label><input type="checkbox" data-s="tcp"><i style="background:#00a65a"></i> TCP</label>
-                        <label><input type="checkbox" data-s="udp"><i style="background:#f39c12"></i> UDP</label>
-                    </div>
+                    <div class="legend" id="ad-legend"></div>
                     <p class="muted small" id="ad-empty" style="margin:12px 0 0; display:none;"></p>
-                    <p class="muted small" style="margin:12px 0 0;">
-                        <b>En vivo</b> muestra los últimos 5 minutos con un punto por segundo (se actualiza cada segundo mientras miras esta pestaña); los demás rangos usan el historial guardado. Cada punto es la <b>velocidad media real</b> del tramo, en paquetes por minuto (no se muestran tramos a medias ni se reparten huecos en picos falsos).
-                        Los <b>huecos</b> de la línea significan que el agente no informó en ese momento.
-                        <b>Frenados</b> cuenta todo lo que descarta el firewall (IPs bloqueadas, límites por IP, paquetes malformados, ping, SSH y web si están activados), no solo lo dirigido a Minecraft.
-                        <b>Conexiones nuevas, TCP y UDP</b> cuentan solo el tráfico externo hacia tus puertos protegidos (sin la lista blanca ni el tráfico interno de Docker).
-                        Con varios nodos, las velocidades se suman.
-                    </p>
+                    <p class="muted small" id="ad-note" style="margin:12px 0 0;"></p>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-h"><h3>Mayores conexiones ahora (por IP externa)</h3><span class="muted small">Hacia los puertos protegidos · se actualiza cada ~30 s</span></div>
+                <div class="tw">
+                    <table class="table">
+                        <thead><tr><th>IP</th><th>Conexiones</th><th style="width:1%;"></th></tr></thead>
+                        <tbody id="ad-top"><tr><td colspan="3" class="muted">Cargando…</td></tr></tbody>
+                    </table>
                 </div>
             </div>
         </div>
@@ -656,13 +673,43 @@
             var cv = $('#ad-chart');
             if (cv) {
                 var URL_TRAFFIC = @json(route('admin.extensions.antiddos.traffic'));
-                var COLORS = { dropped: '#dd4b39', syn: '#3c8dbc', tcp: '#00a65a', udp: '#f39c12' };
-                var NAMES = { dropped: 'Frenados', syn: 'Conexiones nuevas', tcp: 'TCP', udp: 'UDP' };
-                var state = { range: 'live', host: '', data: null, vis: { dropped: true, syn: true, tcp: false, udp: false }, loadedAt: 0, tried: 0, loading: false, failing: false };
+                var URL_BLOCK = @json(route('admin.extensions.antiddos.blocks.store'));
+                var CSRF = @json(csrf_token());
 
-                function fmt(n) { return Math.round(n).toLocaleString('es-ES'); }
-                function fmt1(n) { return n >= 100 ? fmt(n) : (Math.round(n * 10) / 10).toLocaleString('es-ES'); }
+                var PS = { ps: ['por segundo', 1], pm: ['por minuto', 60] };
+                var VIEWS = {
+                    network: {
+                        units: { mbps: ['Mbit/s', 1], mbs: ['MB/s', 0.125], kbs: ['KB/s', 125] }, unit: 'mbps', stacked: false,
+                        series: [['rx', '↓ Bajada (RX)', '#3c8dbc'], ['tx', '↑ Subida (TX)', '#dd4b39'], ['dropped', 'Frenado por el firewall', '#f39c12']],
+                        note: 'Ancho de banda real de la tarjeta de red (todo el tráfico de la máquina, como la gráfica de OVH): ↓ Bajada = lo que entra, ↑ Subida = lo que sale. «Frenado» es lo que descarta el firewall (ya contado dentro de la bajada).'
+                    },
+                    packets: {
+                        units: PS, unit: 'ps', stacked: false,
+                        series: [['rx', 'Paquetes recibidos (interfaz)', '#3c8dbc'], ['tcp', 'TCP a puertos protegidos', '#00a65a'], ['udp', 'UDP a puertos protegidos', '#9b59b6'], ['syn', 'Conexiones nuevas', '#1abc9c'], ['dropped', 'Frenados', '#dd4b39']],
+                        note: '«Paquetes recibidos» son todos los que entran por la tarjeta de red. TCP y UDP cuentan solo el tráfico externo hacia tus puertos protegidos (sin la lista blanca). «Frenados» es todo lo que descarta el firewall (suma de los motivos).'
+                    },
+                    reasons: {
+                        units: PS, unit: 'ps', stacked: true,
+                        series: [['d_ban', 'IP bloqueada', '#dd4b39'], ['d_mal', 'Paquetes malformados', '#e67e22'], ['d_icmp', 'Ping (ICMP)', '#f1c40f'], ['d_syn', 'Límite de conexiones nuevas / SSH', '#9b59b6'], ['d_udp', 'Límite de UDP', '#3498db'], ['d_conn', 'Límite de conexiones simultáneas', '#1abc9c'], ['d_web', 'Límite web', '#95a5a6']],
+                        note: 'Por qué el firewall frena paquetes, apilado: la altura total es todo lo frenado. Si domina «IP bloqueada», los atacantes ya estaban baneados; si domina «Límite de conexiones nuevas», hay un SYN flood en curso.'
+                    }
+                };
+                var state = { view: 'network', range: 'live', host: '', data: null, smooth: 1, scale: 'lin', paused: false, vis: {}, units: {}, loadedAt: 0, tried: 0, loading: false, failing: false };
+                Object.keys(VIEWS).forEach(function (n) { state.units[n] = VIEWS[n].unit; state.vis[n] = {}; VIEWS[n].series.forEach(function (x) { state.vis[n][x[0]] = true; }); });
+
+                function V() { return VIEWS[state.view]; }
+                function mult() { return V().units[state.units[state.view]][1]; }
+                function unitName() { return V().units[state.units[state.view]][0]; }
                 function pad(n) { return (n < 10 ? '0' : '') + n; }
+                function fmtNum(v) {
+                    if (v === null || v === undefined) { return '—'; }
+                    var a = Math.abs(v), L = 'es-ES';
+                    if (a >= 1e6) { return (v / 1e6).toLocaleString(L, { maximumFractionDigits: 2 }) + ' M'; }
+                    if (a >= 1e4) { return (v / 1e3).toLocaleString(L, { maximumFractionDigits: 1 }) + ' k'; }
+                    if (a >= 100) { return Math.round(v).toLocaleString(L); }
+                    if (a >= 10) { return v.toLocaleString(L, { maximumFractionDigits: 1 }); }
+                    return v.toLocaleString(L, { maximumFractionDigits: 2 });
+                }
                 function label(ts, long) {
                     var d = new Date(ts * 1000);
                     var hm = pad(d.getHours()) + ':' + pad(d.getMinutes()) + (state.range === 'live' ? ':' + pad(d.getSeconds()) : '');
@@ -674,6 +721,75 @@
                     return Math.round(sec / 3600) + ' h';
                 }
 
+                // Valores a dibujar: unidad elegida y suavizado (media de los k ultimos puntos conocidos).
+                function values(name) {
+                    var raw = state.data.series[name] || [], m = mult(), k = state.smooth, out = [], win = [];
+                    raw.forEach(function (x) {
+                        if (x === null) { out.push(null); win = []; return; }
+                        win.push(x * m); if (win.length > k) { win.shift(); }
+                        out.push(win.reduce(function (a, b) { return a + b; }, 0) / win.length);
+                    });
+                    return out;
+                }
+
+                function renderStats() {
+                    var box = $('#ad-stats'), d = state.data, html = '';
+                    V().series.forEach(function (sdef) {
+                        var st = d.stats && d.stats[sdef[0]], m = mult();
+                        var now = st && st.now !== null ? st.now * m : null;
+                        var sub = st && st.avg !== null ? 'media ' + fmtNum(st.avg * m) + ' · pico ' + fmtNum(st.peak * m) + ' a las ' + label(st.peak_t, false) : 'sin datos';
+                        html += '<div class="kpi"><div class="l"><i style="background:' + sdef[2] + '"></i>' + sdef[1] + '</div>'
+                              + '<div class="n" style="color:' + sdef[2] + '">' + fmtNum(now) + ' <span style="font-size:12px;font-weight:400;opacity:.7">' + unitName() + '</span></div>'
+                              + '<div class="sub">' + sub + '</div></div>';
+                    });
+                    box.innerHTML = html;
+                }
+
+                function renderLegend() {
+                    var box = $('#ad-legend'); box.innerHTML = '';
+                    V().series.forEach(function (sdef) {
+                        var lab = document.createElement('label');
+                        lab.innerHTML = '<input type="checkbox" ' + (state.vis[state.view][sdef[0]] ? 'checked' : '') + '><i style="background:' + sdef[2] + '"></i> ' + sdef[1];
+                        lab.querySelector('input').addEventListener('change', function () { state.vis[state.view][sdef[0]] = this.checked; draw(); });
+                        box.appendChild(lab);
+                    });
+                }
+
+                function renderUnits() {
+                    var sel = $('#ad-unit'); sel.innerHTML = '';
+                    Object.keys(V().units).forEach(function (u) {
+                        var o = document.createElement('option'); o.value = u; o.textContent = V().units[u][0];
+                        if (u === state.units[state.view]) { o.selected = true; } sel.appendChild(o);
+                    });
+                    $('#ad-note').textContent = V().note;
+                }
+
+                function renderTop() {
+                    var tb = $('#ad-top'), top = (state.data && state.data.top) || [];
+                    if (!top.length) { tb.innerHTML = '<tr><td colspan="3" class="muted">Ninguna IP externa con conexiones hacia tus puertos protegidos en este momento.</td></tr>'; return; }
+                    tb.innerHTML = '';
+                    top.forEach(function (row) {
+                        var tr = document.createElement('tr');
+                        tr.innerHTML = '<td><code></code></td><td></td><td style="white-space:nowrap;"></td>';
+                        tr.querySelector('code').textContent = row.ip; tr.children[1].textContent = row.conns;
+                        var cell = tr.children[2];
+                        if (row.blocked) { cell.innerHTML = '<span class="pill error">Bloqueada</span>'; }
+                        else {
+                            var b = document.createElement('button'); b.type = 'button'; b.className = 'btn btn-xs btn-danger'; b.textContent = 'Bloquear 1 h';
+                            b.addEventListener('click', function () {
+                                if (!confirm('¿Bloquear ' + row.ip + ' durante 1 hora en el panel y en todos los nodos?')) { return; }
+                                var f = document.createElement('form'); f.method = 'POST'; f.action = URL_BLOCK; f.style.display = 'none';
+                                [['_token', CSRF], ['ip', row.ip], ['minutes', '60'], ['reason', 'Muchas conexiones (gráfica de tráfico)']].forEach(function (p) {
+                                    var i = document.createElement('input'); i.type = 'hidden'; i.name = p[0]; i.value = p[1]; f.appendChild(i);
+                                });
+                                document.body.appendChild(f); f.submit();
+                            });
+                            cell.appendChild(b);
+                        }
+                        tb.appendChild(tr);
+                    });
+                }
+
                 function draw(hover) {
                     var d = state.data; if (!d) { return; }
                     var dpr = window.devicePixelRatio || 1;
@@ -682,146 +798,186 @@
                     cv.width = W * dpr; cv.height = H * dpr;
                     var g = cv.getContext('2d'); g.scale(dpr, dpr); g.clearRect(0, 0, W, H);
                     var fg = getComputedStyle(cv).color || '#888';
-                    var L = 60, R = 12, T = 12, B = 26, w = W - L - R, h = H - T - B, n = d.labels.length;
+                    var L = 64, R = 14, T = 12, B = 28, w = W - L - R, h = H - T - B, n = d.labels.length;
+                    var defs = V().series.filter(function (x) { return state.vis[state.view][x[0]]; });
+                    var vals = {}; defs.forEach(function (x) { vals[x[0]] = values(x[0]); });
+                    var stacked = V().stacked, log = state.scale === 'log';
 
+                    // Altura de cada punto (apilado = suma).
+                    function total(i) {
+                        var t = 0, any = false;
+                        defs.forEach(function (x) { var q = vals[x[0]][i]; if (q !== null) { t += q; any = true; } });
+                        return any ? t : null;
+                    }
                     var max = 0;
-                    Object.keys(state.vis).forEach(function (k) {
-                        if (state.vis[k]) { d.series[k].forEach(function (v) { if (v !== null) { max = Math.max(max, v); } }); }
-                    });
-                    if (max < 1) { max = 1; }
-                    var mag = Math.pow(10, Math.floor(Math.log(max) / Math.LN10)), step = mag;
-                    [1, 2, 2.5, 5, 10].some(function (m) { step = m * mag; return step >= max / 4; });
-                    var top = Math.max(step, Math.ceil(max / step) * step);
+                    for (var i = 0; i < n; i++) {
+                        if (stacked) { var tt = total(i); if (tt !== null) { max = Math.max(max, tt); } }
+                        else { defs.forEach(function (x) { var q = vals[x[0]][i]; if (q !== null) { max = Math.max(max, q); } }); }
+                    }
+                    var top, ticks = [];
+                    if (log) {
+                        top = Math.pow(10, Math.max(1, Math.ceil(Math.log(Math.max(max, 1)) / Math.LN10)));
+                        for (var p = 1; p <= top; p *= 10) { ticks.push(p); } ticks.unshift(0);
+                    } else {
+                        if (max <= 0) { max = 1; }
+                        var mag = Math.pow(10, Math.floor(Math.log(max) / Math.LN10)), step = mag;
+                        [1, 2, 2.5, 5, 10].some(function (m) { step = m * mag; return step >= max / 4; });
+                        top = Math.max(step, Math.ceil(max / step) * step);
+                        for (var v = 0; v <= top + step * 0.001; v += step) { ticks.push(v); }
+                    }
+                    var Y = function (val) { var f = log ? Math.log(1 + val) / Math.log(1 + top) : val / top; return T + h - Math.min(1, Math.max(0, f)) * h; };
+                    var X = function (i) { return L + (n > 1 ? i / (n - 1) : 0) * w; };
 
                     g.font = '11px sans-serif'; g.fillStyle = fg; g.strokeStyle = 'rgba(127,127,127,.25)'; g.lineWidth = 1;
                     g.textAlign = 'right'; g.textBaseline = 'middle';
-                    for (var v = 0; v <= top + 0.001; v += step) {
-                        var y = T + h - (v / top) * h;
-                        g.beginPath(); g.moveTo(L, y); g.lineTo(W - R, y); g.stroke();
-                        g.fillText(fmt1(v), L - 6, y);
-                    }
-                    g.save(); g.translate(12, T + h / 2); g.rotate(-Math.PI / 2); g.textAlign = 'center'; g.fillText('paquetes / min', 0, 0); g.restore();
+                    ticks.forEach(function (tk) { var y = Y(tk); g.beginPath(); g.moveTo(L, y); g.lineTo(W - R, y); g.stroke(); g.fillText(fmtNum(tk), L - 6, y); });
+                    g.save(); g.translate(12, T + h / 2); g.rotate(-Math.PI / 2); g.textAlign = 'center'; g.fillText(unitName() + (log ? ' (log)' : ''), 0, 0); g.restore();
                     g.textAlign = 'center'; g.textBaseline = 'top';
-                    var ticks = Math.min(6, n);
-                    for (var t = 0; t < ticks; t++) {
-                        var idx = Math.round(t * (n - 1) / Math.max(1, ticks - 1));
-                        g.fillText(label(d.labels[idx]), L + (n > 1 ? idx / (n - 1) : 0) * w, T + h + 6);
-                    }
-                    var X = function (i) { return L + (n > 1 ? i / (n - 1) : 0) * w; };
-                    var Y = function (val) { return T + h - (val / top) * h; };
+                    var nt = Math.min(7, n);
+                    for (var t = 0; t < nt; t++) { var idx = Math.round(t * (n - 1) / Math.max(1, nt - 1)); g.fillText(label(d.labels[idx]), X(idx), T + h + 7); }
 
-                    // Cada serie se dibuja por tramos continuos: un hueco (null) corta la linea.
-                    Object.keys(state.vis).forEach(function (k) {
-                        if (!state.vis[k]) { return; }
-                        var vals = d.series[k], run = [];
-                        function flush() {
-                            if (!run.length) { return; }
-                            g.beginPath();
-                            run.forEach(function (i, j) { j ? g.lineTo(X(i), Y(vals[i])) : g.moveTo(X(i), Y(vals[i])); });
-                            g.strokeStyle = COLORS[k]; g.lineWidth = 2; g.stroke();
-                            if (run.length === 1) { g.fillStyle = COLORS[k]; g.beginPath(); g.arc(X(run[0]), Y(vals[run[0]]), 2.5, 0, 6.3); g.fill(); }
-                            else {
-                                g.lineTo(X(run[run.length - 1]), T + h); g.lineTo(X(run[0]), T + h); g.closePath();
-                                g.globalAlpha = 0.10; g.fillStyle = COLORS[k]; g.fill(); g.globalAlpha = 1;
-                            }
-                            run = [];
-                        }
-                        vals.forEach(function (val, i) { if (val === null) { flush(); } else { run.push(i); } });
-                        flush();
-                    });
+                    // Tramos continuos: un hueco (null) corta la linea.
+                    function runs(arr) { var out = [], cur = []; arr.forEach(function (q, i) { if (q === null) { if (cur.length) { out.push(cur); cur = []; } } else { cur.push(i); } }); if (cur.length) { out.push(cur); } return out; }
+
+                    if (stacked) {
+                        var base = []; for (var z = 0; z < n; z++) { base.push(0); }
+                        defs.forEach(function (x) {
+                            var arr = vals[x[0]], lower = base.slice(), upper = [];
+                            for (var i2 = 0; i2 < n; i2++) { upper.push(arr[i2] === null ? null : base[i2] + arr[i2]); }
+                            runs(upper).forEach(function (run) {
+                                g.beginPath();
+                                run.forEach(function (i3, j) { j ? g.lineTo(X(i3), Y(upper[i3])) : g.moveTo(X(i3), Y(upper[i3])); });
+                                for (var r = run.length - 1; r >= 0; r--) { g.lineTo(X(run[r]), Y(lower[run[r]])); }
+                                g.closePath(); g.globalAlpha = 0.55; g.fillStyle = x[2]; g.fill(); g.globalAlpha = 1;
+                                g.beginPath(); run.forEach(function (i4, j2) { j2 ? g.lineTo(X(i4), Y(upper[i4])) : g.moveTo(X(i4), Y(upper[i4])); });
+                                g.strokeStyle = x[2]; g.lineWidth = 1.5; g.stroke();
+                            });
+                            for (var i5 = 0; i5 < n; i5++) { if (arr[i5] !== null) { base[i5] += arr[i5]; } }
+                        });
+                    } else {
+                        defs.forEach(function (x) {
+                            var arr = vals[x[0]];
+                            runs(arr).forEach(function (run) {
+                                g.beginPath();
+                                run.forEach(function (i6, j) { j ? g.lineTo(X(i6), Y(arr[i6])) : g.moveTo(X(i6), Y(arr[i6])); });
+                                g.strokeStyle = x[2]; g.lineWidth = 2; g.stroke();
+                                if (run.length === 1) { g.fillStyle = x[2]; g.beginPath(); g.arc(X(run[0]), Y(arr[run[0]]), 2.5, 0, 6.3); g.fill(); }
+                                else {
+                                    g.lineTo(X(run[run.length - 1]), T + h); g.lineTo(X(run[0]), T + h); g.closePath();
+                                    g.globalAlpha = 0.08; g.fillStyle = x[2]; g.fill(); g.globalAlpha = 1;
+                                }
+                            });
+                        });
+                    }
 
                     var tip = $('#ad-tip');
                     if (hover !== undefined && hover !== null && n > 0) {
                         var hx = X(hover);
                         g.strokeStyle = 'rgba(127,127,127,.6)'; g.beginPath(); g.moveTo(hx, T); g.lineTo(hx, T + h); g.stroke();
-                        var html = '<b>' + label(d.labels[hover], true) + '</b>';
-                        var any = false;
-                        Object.keys(state.vis).forEach(function (k) {
-                            if (!state.vis[k]) { return; }
-                            var val = d.series[k][hover];
-                            if (val !== null) { any = true; html += '<br><span style="color:' + COLORS[k] + '">●</span> ' + NAMES[k] + ': ' + fmt1(val) + ' / min'; }
+                        var html = '<b>' + label(d.labels[hover], true) + '</b>', any = false;
+                        defs.forEach(function (x) {
+                            var q = vals[x[0]][hover];
+                            if (q !== null) { any = true; html += '<br><span style="color:' + x[2] + '">●</span> ' + x[1] + ': <b>' + fmtNum(q) + '</b> ' + unitName(); }
                         });
+                        if (stacked && any) { html += '<br>Total: <b>' + fmtNum(total(hover)) + '</b> ' + unitName(); }
                         if (!any) { html += '<br>Sin datos del agente en este momento'; }
                         tip.innerHTML = html; tip.style.display = 'block';
-                        tip.style.left = Math.min(W - 230, Math.max(0, hx + 12)) + 'px'; tip.style.top = (T + 6) + 'px';
+                        tip.style.left = Math.min(W - 270, Math.max(0, hx + 12)) + 'px'; tip.style.top = (T + 6) + 'px';
                     } else { tip.style.display = 'none'; }
                 }
 
-                function kpis() {
-                    var t = state.data.totals;
-                    $('#k-dropped').textContent = fmt(t.dropped); $('#k-peak').textContent = fmt(t.peak_dropped_per_min);
-                    $('#k-syn').textContent = fmt(t.syn); $('#k-tcp').textContent = fmt(t.tcp); $('#k-udp').textContent = fmt(t.udp);
-                    $('#k-bans').textContent = fmt(t.bans_now);
-                    var empty = $('#ad-empty');
-                    if (!state.data.has_data) {
+                function messages() {
+                    var d = state.data, empty = $('#ad-empty');
+                    if (!d.has_data) {
                         empty.style.display = 'block';
                         empty.textContent = state.range === 'live'
-                            ? 'Aún no llegan datos en vivo. Hace falta el servicio antiddos-live en el nodo (versión 1.6.0): actualízalo con «sudo antiddos update --force». Mientras tanto puedes usar los rangos de 1 h o más.'
-                            : (state.data.last_sample
-                                ? 'Todavía no hay suficientes datos en este periodo (hacen falta al menos dos muestras seguidas del agente). Espera un minuto.'
-                                : 'Aún no hay datos. Los agentes envían sus contadores cada ~30 s; si el agente es anterior a la versión 1.4.0, actualízalo con: sudo antiddos update --force');
+                            ? 'Aún no llegan datos en vivo. Hace falta el servicio antiddos-live del nodo con la versión 1.6.0 o superior: actualiza con «sudo antiddos update --force». Mientras tanto puedes usar los rangos de 1 h o más.'
+                            : (d.last_sample ? 'Todavía no hay suficientes datos en este periodo (hacen falta al menos dos muestras seguidas del agente). Espera un minuto.'
+                                             : 'Aún no hay datos. Si el agente es anterior a la versión 1.6.0, actualízalo con: sudo antiddos update --force');
                     } else { empty.style.display = 'none'; }
                 }
 
-                // Estado «en directo»: dice la verdad sobre lo reciente que son los datos.
                 function live() {
                     var el = $('#ad-live'), d = state.data;
-                    if (!el) { return; }
-                    // Edad calculada con la hora del SERVIDOR (no la del navegador) para no depender de relojes desajustados.
                     var age = d && d.last_sample ? (d.generated_at - d.last_sample) + (Date.now() - state.loadedAt) / 1000 : 0, html;
-                    if (state.failing) {
-                        html = '<span style="color:var(--err)">● No se pudo actualizar</span> · reintentando…';
-                    } else if (!d) {
-                        html = '<span class="muted">Cargando…</span>';
-                    } else if (!d.last_sample) {
-                        html = '<span style="color:var(--warn)">● Sin datos todavía</span>';
-                    } else if (age > (state.range === 'live' ? 6 : 120)) {
-                        html = '<span style="color:var(--err)">● Sin datos recientes del agente</span> · último dato hace ' + ago(age) + ' (el agente no está informando)';
-                    } else {
-                        html = '<span style="color:var(--ok)">● En directo</span> · último dato del agente hace ' + ago(age) + ' · se actualiza ' + (state.range === 'live' ? 'cada segundo' : 'cada 15 s');
-                    }
+                    if (state.paused) { html = '<span style="color:var(--warn)">⏸ En pausa</span> · pulsa «Reanudar» para seguir en directo'; }
+                    else if (state.failing) { html = '<span style="color:var(--err)">● No se pudo actualizar</span> · reintentando…'; }
+                    else if (!d) { html = '<span class="muted">Cargando…</span>'; }
+                    else if (!d.last_sample) { html = '<span style="color:var(--warn)">● Sin datos todavía</span>'; }
+                    else if (age > (state.range === 'live' ? 6 : 120)) { html = '<span style="color:var(--err)">● Sin datos recientes del agente</span> · último dato hace ' + ago(age) + ' (el agente no está informando)'; }
+                    else { html = '<span style="color:var(--ok)">● En directo</span> · último dato del agente hace ' + ago(age) + ' · se actualiza ' + (state.range === 'live' ? 'cada segundo' : 'cada 15 s'); }
                     el.innerHTML = html;
                 }
+
+                function render() { renderStats(); renderLegend(); renderTop(); messages(); draw(); live(); }
 
                 function load() {
                     if (state.loading) { return; }
                     state.loading = true; state.tried = Date.now();
-                    var url = URL_TRAFFIC + '?range=' + encodeURIComponent(state.range) + (state.host ? '&host=' + encodeURIComponent(state.host) : '');
+                    var url = URL_TRAFFIC + '?range=' + encodeURIComponent(state.range) + '&view=' + encodeURIComponent(state.view) + (state.host ? '&host=' + encodeURIComponent(state.host) : '');
                     fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }, cache: 'no-store' })
                         .then(function (r) { if (!r.ok) { throw new Error(r.status); } return r.json(); })
-                        .then(function (json) { state.data = json; state.loadedAt = Date.now(); state.failing = false; kpis(); draw(); live(); })
+                        .then(function (json) {
+                            if (json.view !== state.view) { return; }   // respuesta vieja de otra vista
+                            state.data = json; state.loadedAt = Date.now(); state.failing = false; render();
+                        })
                         .catch(function () { state.failing = true; live(); })
                         .then(function () { state.loading = false; });
                 }
 
+                function reloadNow() { state.data = null; state.loading = false; $('#ad-stats').innerHTML = ''; load(); }
+
+                $$('#ad-view button').forEach(function (b) {
+                    b.addEventListener('click', function () {
+                        $$('#ad-view button').forEach(function (x) { x.classList.toggle('on', x === b); });
+                        state.view = b.getAttribute('data-v'); renderUnits(); renderLegend(); reloadNow();
+                    });
+                });
                 $$('#ad-range button').forEach(function (b) {
                     b.addEventListener('click', function () {
                         $$('#ad-range button').forEach(function (x) { x.classList.toggle('on', x === b); });
-                        state.range = b.getAttribute('data-r'); load();
+                        state.range = b.getAttribute('data-r'); reloadNow();
                     });
                 });
-                $('#ad-host').addEventListener('change', function () { state.host = this.value; load(); });
-                $$('#ad-legend input').forEach(function (c) { c.addEventListener('change', function () { state.vis[c.getAttribute('data-s')] = c.checked; draw(); }); });
+                $('#ad-host').addEventListener('change', function () { state.host = this.value; reloadNow(); });
+                $('#ad-unit').addEventListener('change', function () { state.units[state.view] = this.value; if (state.data) { renderStats(); draw(); } });
+                $('#ad-smooth').addEventListener('change', function () { state.smooth = parseInt(this.value, 10) || 1; draw(); });
+                $('#ad-scale').addEventListener('change', function () { state.scale = this.value; draw(); });
+                $('#ad-pause').addEventListener('click', function () {
+                    state.paused = !state.paused; this.textContent = state.paused ? '▶ Reanudar' : '⏸ Pausar';
+                    if (!state.paused) { load(); } live();
+                });
+                $('#ad-csv').addEventListener('click', function () {
+                    var d = state.data; if (!d) { return; }
+                    var m = mult(), cols = V().series, rows = [['hora'].concat(cols.map(function (c) { return c[1] + ' (' + unitName() + ')'; })).join(';')];
+                    d.labels.forEach(function (ts, i) {
+                        var dt = new Date(ts * 1000), stamp = dt.getFullYear() + '-' + pad(dt.getMonth() + 1) + '-' + pad(dt.getDate()) + ' ' + pad(dt.getHours()) + ':' + pad(dt.getMinutes()) + ':' + pad(dt.getSeconds());
+                        rows.push([stamp].concat(cols.map(function (c) { var q = d.series[c[0]][i]; return q === null ? '' : String(q * m).replace('.', ','); })).join(';'));
+                    });
+                    var a = document.createElement('a');
+                    a.href = URL.createObjectURL(new Blob(['﻿' + rows.join('\r\n')], { type: 'text/csv;charset=utf-8' }));
+                    a.download = 'trafico-' + state.view + '-' + state.range + '.csv'; document.body.appendChild(a); a.click(); a.remove();
+                });
                 cv.addEventListener('mousemove', function (e) {
                     if (!state.data) { return; }
                     var rect = cv.getBoundingClientRect(), n = state.data.labels.length;
-                    var rel = (e.clientX - rect.left - 60) / Math.max(1, rect.width - 72);
+                    var rel = (e.clientX - rect.left - 64) / Math.max(1, rect.width - 78);
                     draw(Math.max(0, Math.min(n - 1, Math.round(rel * (n - 1)))));
                 });
                 cv.addEventListener('mouseleave', function () { draw(); });
                 window.addEventListener('resize', function () { draw(); });
 
-                // Siempre al dia: se actualiza cada 15 s aunque estes en otra pestaña del panel
-                // (asi al volver ya esta fresco) y se refresca al instante al volver a la ventana.
-                tabs.forEach(function (a) { a.addEventListener('click', function () { if (a.getAttribute('data-tab') === 'traffic') { setTimeout(function () { load(); draw(); }, 30); } }); });
-                document.addEventListener('visibilitychange', function () { if (!document.hidden) { load(); } });
+                // Siempre al dia: cada segundo en vivo mientras miras la pestana, cada 15 s el resto del tiempo;
+                // en pausa no se pide nada y al volver a la ventana se refresca al instante.
+                tabs.forEach(function (a) { a.addEventListener('click', function () { if (a.getAttribute('data-tab') === 'traffic') { setTimeout(function () { if (!state.paused) { load(); } draw(); }, 30); } }); });
+                document.addEventListener('visibilitychange', function () { if (!document.hidden && !state.paused) { load(); } });
                 setInterval(function () {
-                    if (document.hidden) { return; }
+                    if (document.hidden || state.paused) { return; }
                     var watching = state.range === 'live' && $('#pane-traffic').classList.contains('active');
                     if (Date.now() - state.tried >= (watching ? 950 : 14800)) { load(); }
                 }, 250);
                 setInterval(live, 1000);
-                load();
+                renderUnits(); renderLegend(); load();
             }
         })();
     </script>

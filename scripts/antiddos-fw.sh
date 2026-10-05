@@ -58,6 +58,7 @@ load_conf() {
     API_KEY=""               # clave de la API del panel
     STATIC_WHITELIST="127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
     EXTRA_WHITELIST=""       # IPs/CIDR adicionales separados por espacio
+    NET_IFACE=""             # interfaz publica para RX/TX (vacio = la de la ruta por defecto)
 
     # shellcheck disable=SC1090
     [[ -f "$CONF" ]] && . "$CONF"
@@ -146,7 +147,8 @@ remove_rules() {
     while ipt -t raw    -D PREROUTING -j ANTIDDOS   2>/dev/null; do :; done
     while ipt -t mangle -D PREROUTING -j ANTIDDOS_M 2>/dev/null; do :; done
     local spec
-    for spec in "raw ANTIDDOS" "raw VS_SYNFLOOD" "raw ANTIDDOS_CTCP" "raw ANTIDDOS_CUDP" "raw ANTIDDOS_CSYN" "mangle ANTIDDOS_M"; do
+    for spec in "raw ANTIDDOS" "raw VS_SYNFLOOD" "raw ANTIDDOS_CTCP" "raw ANTIDDOS_CUDP" "raw ANTIDDOS_CSYN" \
+                 "raw ANTIDDOS_D_BAN" "raw ANTIDDOS_D_MAL" "raw ANTIDDOS_D_ICMP" "raw ANTIDDOS_D_UDP" "raw ANTIDDOS_D_WEB" "mangle ANTIDDOS_M"; do
         # shellcheck disable=SC2086
         set -- $spec
         ipt -t "$1" -F "$2" 2>/dev/null
@@ -166,6 +168,14 @@ apply_rules() {
     ipt -t raw -N ANTIDDOS
     ipt -t mangle -N ANTIDDOS_M
 
+    # Una cadena por MOTIVO de descarte (cada una solo hace DROP): asi el panel
+    # puede decir exactamente por que se frena el trafico (grafica «Motivos»).
+    local reason
+    for reason in BAN MAL ICMP UDP WEB; do
+        ipt -t raw -N "ANTIDDOS_D_${reason}"
+        ipt -t raw -A "ANTIDDOS_D_${reason}" -j DROP
+    done
+
     # Sub-cadena: registra (limitado), bloquea la IP y descarta el paquete.
     ipt -t raw -A VS_SYNFLOOD -m limit --limit 6/min --limit-burst 3 -j LOG --log-prefix "ANTIDDOS ban " --log-level 4
     ipt -t raw -A VS_SYNFLOOD -j SET --add-set vs_ban src --exist --timeout "$BAN_SECONDS"
@@ -175,24 +185,24 @@ apply_rules() {
 
     "${R[@]}" -m set --match-set vs_white src      -j RETURN
     "${R[@]}" -m set --match-set vs_white_feed src -j RETURN
-    "${R[@]}" -m set --match-set vs_feed src       -j DROP
-    "${R[@]}" -m set --match-set vs_ban src        -j DROP
+    "${R[@]}" -m set --match-set vs_feed src       -j ANTIDDOS_D_BAN
+    "${R[@]}" -m set --match-set vs_ban src        -j ANTIDDOS_D_BAN
 
     # Paquetes malformados / escaneos clasicos.
-    "${R[@]}" -f -j DROP
-    "${R[@]}" -p tcp --tcp-flags ALL NONE        -j DROP
-    "${R[@]}" -p tcp --tcp-flags ALL ALL         -j DROP
-    "${R[@]}" -p tcp --tcp-flags ALL FIN,PSH,URG -j DROP
-    "${R[@]}" -p tcp --tcp-flags SYN,FIN SYN,FIN -j DROP
-    "${R[@]}" -p tcp --tcp-flags SYN,RST SYN,RST -j DROP
-    "${R[@]}" -p tcp --tcp-flags FIN,RST FIN,RST -j DROP
-    "${R[@]}" -p tcp --tcp-flags ACK,FIN FIN     -j DROP
-    "${R[@]}" -p tcp --tcp-flags ACK,URG URG     -j DROP
+    "${R[@]}" -f -j ANTIDDOS_D_MAL
+    "${R[@]}" -p tcp --tcp-flags ALL NONE        -j ANTIDDOS_D_MAL
+    "${R[@]}" -p tcp --tcp-flags ALL ALL         -j ANTIDDOS_D_MAL
+    "${R[@]}" -p tcp --tcp-flags ALL FIN,PSH,URG -j ANTIDDOS_D_MAL
+    "${R[@]}" -p tcp --tcp-flags SYN,FIN SYN,FIN -j ANTIDDOS_D_MAL
+    "${R[@]}" -p tcp --tcp-flags SYN,RST SYN,RST -j ANTIDDOS_D_MAL
+    "${R[@]}" -p tcp --tcp-flags FIN,RST FIN,RST -j ANTIDDOS_D_MAL
+    "${R[@]}" -p tcp --tcp-flags ACK,FIN FIN     -j ANTIDDOS_D_MAL
+    "${R[@]}" -p tcp --tcp-flags ACK,URG URG     -j ANTIDDOS_D_MAL
 
     # Ping flood.
     "${R[@]}" -p icmp --icmp-type echo-request \
         -m hashlimit --hashlimit-name vs_icmp --hashlimit-mode srcip \
-        --hashlimit-above "${ICMP_RATE}/second" --hashlimit-burst 20 -j DROP
+        --hashlimit-above "${ICMP_RATE}/second" --hashlimit-burst 20 -j ANTIDDOS_D_ICMP
 
     # Contadores del trafico externo hacia los puertos protegidos (lo de la lista
     # blanca ya salio con RETURN y no se cuenta).
@@ -224,7 +234,7 @@ apply_rules() {
     if [[ -n "$WEB_PORTS" ]]; then
         "${R[@]}" -p tcp --syn -m multiport --dports "$WEB_PORTS" \
             -m hashlimit --hashlimit-name vs_web --hashlimit-mode srcip \
-            --hashlimit-above 60/second --hashlimit-burst 120 -j DROP
+            --hashlimit-above 60/second --hashlimit-burst 120 -j ANTIDDOS_D_WEB
     fi
 
     # UDP flood (Bedrock/Geyser): solo se descarta; las IPs de origen de un
@@ -232,7 +242,7 @@ apply_rules() {
     if [[ -n "$UDP_PORTS" ]]; then
         "${R[@]}" -p udp -m multiport --dports "$UDP_PORTS" \
             -m hashlimit --hashlimit-name vs_udp --hashlimit-mode srcip \
-            --hashlimit-above "${UDP_RATE}/second" --hashlimit-burst "$UDP_BURST" -j DROP
+            --hashlimit-above "${UDP_RATE}/second" --hashlimit-burst "$UDP_BURST" -j ANTIDDOS_D_UDP
     fi
 
     # Conexiones simultaneas por IP (conntrack ya esta resuelto en mangle).
@@ -364,26 +374,24 @@ json_arr() { local out="" x; for x in "$@"; do out+="${out:+,}\"${x}\""; done; e
 count_set() { ipset list "$1" 2>/dev/null | awk '/^Number of entries:/ {print $4}' | head -1; }
 
 dropped_packets() {
-    { ipt -t raw -L ANTIDDOS -v -n -x 2>/dev/null
-      ipt -t raw -L VS_SYNFLOOD -v -n -x 2>/dev/null
-      ipt -t mangle -L ANTIDDOS_M -v -n -x 2>/dev/null; } \
-        | awk '$3=="DROP" {s+=$1} END{print s+0}'
+    read_counters | awk '{print $6 + $7 + $8 + $9 + $10 + $11 + $12}'
 }
 
-# Suma de paquetes de las reglas que saltan a una cadena contadora.
-chain_hits() { ipt -t raw -L ANTIDDOS -v -n -x 2>/dev/null | awk -v c="$1" '$3==c {s+=$1} END{print s+0}'; }
-
 build_heartbeat() {
-    local active=false mode=http ips bl bp dr ct cu cs
-    ct="$(chain_hits ANTIDDOS_CTCP)"; cu="$(chain_hits ANTIDDOS_CUDP)"; cs="$(chain_hits ANTIDDOS_CSYN)"
-    bl="$(count_set vs_ban)"; bp="$(count_set vs_feed)"; dr="$(dropped_packets)"
+    local active=false mode=http ips bl bp c top net
+    c="$(read_counters)"; net="$(read_net)"
+    bl="$(count_set vs_ban)"; bp="$(count_set vs_feed)"; top="$(top_ips_json)"
     ipt -t raw -L ANTIDDOS -n >/dev/null 2>&1 && active=true
     panel_is_local && mode=local
     # shellcheck disable=SC2046
     ips="$(json_arr $(hostname -I 2>/dev/null))"
-    printf '{"host":"%s","ips":%s,"version":"%s","active":%s,"mode":"%s","tcp":"%s","udp":"%s","attack":%s,"conn_limit":%s,"syn_rate":%s,"udp_rate":%s,"ban_seconds":%s,"bans_local":%s,"bans_panel":%s,"dropped":%s,"tcp_pkts":%s,"udp_pkts":%s,"syn":%s}' \
+    # shellcheck disable=SC2086
+    set -- $c
+    local dropped=$(( ${6:-0} + ${7:-0} + ${8:-0} + ${9:-0} + ${10:-0} + ${11:-0} + ${12:-0} ))
+    printf '{"host":"%s","ips":%s,"version":"%s","active":%s,"mode":"%s","tcp":"%s","udp":"%s","attack":%s,"conn_limit":%s,"syn_rate":%s,"udp_rate":%s,"ban_seconds":%s,"bans_local":%s,"bans_panel":%s,"dropped":%s,"tcp_pkts":%s,"udp_pkts":%s,"syn":%s,"tcp_bytes":%s,"udp_bytes":%s,"drop_bytes":%s,"d_ban":%s,"d_mal":%s,"d_icmp":%s,"d_syn":%s,"d_udp":%s,"d_conn":%s,"d_web":%s,"rx_bytes":%s,"rx_pkts":%s,"tx_bytes":%s,"tx_pkts":%s,"top_ips":%s}' \
         "$(hostname)" "$ips" "$AGENT_VERSION" "$active" "$mode" "$TCP_PORTS" "$UDP_PORTS" "${ATTACK_MODE:-0}" \
-        "$CONN_LIMIT" "$SYN_RATE" "$UDP_RATE" "$BAN_SECONDS" "${bl:-0}" "${bp:-0}" "${dr:-0}" "${ct:-0}" "${cu:-0}" "${cs:-0}"
+        "$CONN_LIMIT" "$SYN_RATE" "$UDP_RATE" "$BAN_SECONDS" "${bl:-0}" "${bp:-0}" "$dropped" \
+        "${1:-0}" "${2:-0}" "${3:-0}" "${4:-0}" "${5:-0}" "${13:-0}" "${6:-0}" "${7:-0}" "${8:-0}" "${9:-0}" "${10:-0}" "${11:-0}" "${12:-0}" $net "$top"
 }
 
 send_heartbeat() {
@@ -405,18 +413,74 @@ LIVE_JSON="${LIVE_DIR}/live.json"
 LIVE_EVERY=1
 LIVE_KEEP=300        # 300 muestras x 1 s = 5 minutos
 
-# "paquetes_frenados syn tcp udp ip_bloqueadas": una sola lectura de raw y otra de mangle.
+# Una sola lectura de raw y otra de mangle. Imprime 13 numeros:
+#   tcp udp syn  tcp_bytes udp_bytes  d_ban d_mal d_icmp d_syn d_udp d_conn d_web  drop_bytes
+# (paquetes recibidos hacia los puertos protegidos y paquetes frenados por motivo).
 read_counters() {
-    local raw mangle drop_m bans
+    local raw mangle dm
     raw="$(ipt -t raw -L -v -n -x 2>/dev/null)"
     mangle="$(ipt -t mangle -L ANTIDDOS_M -v -n -x 2>/dev/null)"
-    drop_m="$(awk '$3=="DROP" {s+=$1} END{print s+0}' <<<"$mangle")"
-    bans="$(( $(ipset list -t vs_ban 2>/dev/null | awk '/^Number of entries:/ {print $4}') + 0 ))"
-    awk -v dm="$drop_m" -v b="$bans" '
+    dm="$(awk '$3=="DROP" {p+=$1; b+=$2} END{printf "%d %d", p, b}' <<<"$mangle")"
+    awk -v dm="$dm" '
+        BEGIN { split(dm, m, " "); dconn = m[1] + 0; dbytes = m[2] + 0 }
         /^Chain / { chain = $2; next }
-        chain == "ANTIDDOS" || chain == "VS_SYNFLOOD" { if ($3 == "DROP") d += $1 }
-        chain == "ANTIDDOS" { if ($3 == "ANTIDDOS_CSYN") syn += $1; if ($3 == "ANTIDDOS_CTCP") tcp += $1; if ($3 == "ANTIDDOS_CUDP") udp += $1 }
-        END { printf "%d %d %d %d %d\n", d + dm, syn, tcp, udp, b }' <<<"$raw"
+        chain == "ANTIDDOS" {
+            if ($3 == "ANTIDDOS_CTCP") { tcp += $1; tcpb += $2 }
+            if ($3 == "ANTIDDOS_CUDP") { udp += $1; udpb += $2 }
+            if ($3 == "ANTIDDOS_CSYN") { syn += $1 }
+        }
+        $3 == "DROP" {
+            if (chain == "ANTIDDOS_D_BAN")  { dban  += $1; dbytes += $2 }
+            if (chain == "ANTIDDOS_D_MAL")  { dmal  += $1; dbytes += $2 }
+            if (chain == "ANTIDDOS_D_ICMP") { dicmp += $1; dbytes += $2 }
+            if (chain == "ANTIDDOS_D_UDP")  { dudp  += $1; dbytes += $2 }
+            if (chain == "ANTIDDOS_D_WEB")  { dweb  += $1; dbytes += $2 }
+            if (chain == "VS_SYNFLOOD")     { dsyn  += $1; dbytes += $2 }
+        }
+        END { printf "%d %d %d %d %d %d %d %d %d %d %d %d %d\n", tcp, udp, syn, tcpb, udpb, dban, dmal, dicmp, dsyn, dudp, dconn, dweb, dbytes }' <<<"$raw"
+}
+
+# Interfaz publica: la de la ruta por defecto (o NET_IFACE si se fuerza en agent.conf).
+net_iface() {
+    if [[ -n "${NET_IFACE:-}" ]]; then printf '%s' "$NET_IFACE"; return; fi
+    local dev
+    dev="$(ip -o route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}')"
+    [[ -z "$dev" ]] && dev="$(awk -F'[: ]+' 'NR > 2 && $2 != "lo" && $2 !~ /^(docker|veth|br-|pterodactyl)/ { print $2; exit }' /proc/net/dev 2>/dev/null)"
+    printf '%s' "$dev"
+}
+
+# Contadores de la tarjeta de red (como la grafica de OVH): "rx_bytes rx_pkts tx_bytes tx_pkts".
+read_net() {
+    local dev="${1:-$(net_iface)}"
+    [[ -n "$dev" ]] || { echo "0 0 0 0"; return; }
+    awk -v dev="$dev" '{ line = $0; sub(/^[ \t]+/, "", line); n = index(line, ":"); if (n == 0) next
+            name = substr(line, 1, n - 1); if (name != dev) next
+            split(substr(line, n + 1), f, " ")
+            printf "%d %d %d %d\n", f[1], f[2], f[9], f[10]; found = 1 }
+        END { if (!found) print "0 0 0 0" }' /proc/net/dev 2>/dev/null
+}
+
+# Hora con milisegundos (mas precision para calcular velocidades).
+now_ms() {
+    local t="${EPOCHREALTIME:-}"
+    if [[ -n "$t" ]]; then t="${t/,/.}"; printf '%s' "${t%???}"; else date +%s.%3N 2>/dev/null || date +%s; fi
+}
+
+# Las 10 IPs externas con mas conexiones hacia los puertos protegidos (JSON).
+top_ips_json() {
+    [[ -r /proc/net/nf_conntrack ]] || { echo "[]"; return; }
+    awk -v spec="${TCP_PORTS},${UDP_PORTS}" '
+        BEGIN { n = split(spec, parts, ","); for (i = 1; i <= n; i++) { if (parts[i] == "") continue; m = split(parts[i], r, ":"); lo[++k] = r[1] + 0; hi[k] = (m > 1 ? r[2] + 0 : r[1] + 0) } }
+        ($3 == "tcp" || $3 == "udp") {
+            s = ""; d = ""
+            for (i = 1; i <= NF; i++) { if (s == "" && $i ~ /^src=/) s = substr($i, 5); if (d == "" && $i ~ /^dport=/) d = substr($i, 7) }
+            if (d == "" || s ~ /:/ || s ~ /^(10\.|127\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)/) next
+            d += 0
+            for (j = 1; j <= k; j++) if (d >= lo[j] && d <= hi[j]) { c[s]++; break }
+        }
+        END { for (ip in c) print c[ip], ip }' /proc/net/nf_conntrack 2>/dev/null \
+        | sort -rn | head -10 \
+        | awk 'BEGIN { printf "[" } { printf "%s{\"ip\":\"%s\",\"conns\":%d}", (NR > 1 ? "," : ""), $2, $1 } END { print "]" }'
 }
 
 # Bucle del servicio antiddos-live: lee los contadores cada segundo, guarda los ultimos
@@ -429,14 +493,18 @@ cmd_watch() {
     info "Modo en vivo activo: contadores cada ${LIVE_EVERY} s (${LIVE_JSON})."
     local loops=0
 
-    local ts line host
+    local ts line net host bans_now dev
     host="$(hostname)"
+    dev="$(net_iface)"
 
     while true; do
         load_conf
-        ts="$(date +%s)"
+        ts="$(now_ms)"
         line="$(read_counters)"
-        echo "${ts} ${line}" >> "$LIVE_RING"
+        net="$(read_net "$dev")"
+        (( loops % 60 == 0 )) && dev="$(net_iface)"
+        bans_now="$(( $(ipset list -t vs_ban 2>/dev/null | awk '/^Number of entries:/ {print $4}') + 0 ))"
+        echo "${ts} ${line} ${net} ${bans_now}" >> "$LIVE_RING"
 
         # El archivo se recorta cada 60 vueltas (no en cada una, para gastar poco);
         # el JSON solo incluye siempre las ultimas LIVE_KEEP muestras.
@@ -447,15 +515,17 @@ cmd_watch() {
 
         tail -n "$LIVE_KEEP" "$LIVE_RING" | awk -v host="$host" '
             BEGIN { printf "{\"host\":\"%s\",\"samples\":[", host }
-            { printf "%s{\"t\":%d,\"dropped\":%s,\"syn\":%s,\"tcp\":%s,\"udp\":%s,\"bans\":%s}", (NR > 1 ? "," : ""), $1, $2, $3, $4, $5, $6 }
+            { printf "%s{\"t\":%s,\"tcp\":%s,\"udp\":%s,\"syn\":%s,\"tcp_b\":%s,\"udp_b\":%s,\"d_ban\":%s,\"d_mal\":%s,\"d_icmp\":%s,\"d_syn\":%s,\"d_udp\":%s,\"d_conn\":%s,\"d_web\":%s,\"d_bytes\":%s,\"rx_b\":%s,\"rx_p\":%s,\"tx_b\":%s,\"tx_p\":%s,\"bans\":%s}", (NR > 1 ? "," : ""), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19 }
             END { print "]}" }' > "${LIVE_JSON}.tmp" && chmod 644 "${LIVE_JSON}.tmp" && mv -f "${LIVE_JSON}.tmp" "$LIVE_JSON"
 
         # Panel en otra maquina: se envia la muestra (en segundo plano, sin frenar el bucle).
         if ! panel_is_local && [[ -n "$PANEL_URL" && -n "$API_KEY" ]] && have curl; then
             # shellcheck disable=SC2086
+            set -- $net; local rxb=$1 rxp=$2 txb=$3 txp=$4
+            # shellcheck disable=SC2086
             set -- $line
             ( curl -fsS --max-time 2 -X POST -H "X-Antiddos-Key: ${API_KEY}" -H "Content-Type: application/json" \
-                --data "{\"host\":\"${host}\",\"t\":${ts},\"dropped\":$1,\"syn\":$2,\"tcp\":$3,\"udp\":$4,\"bans\":$5}" \
+                --data "{\"host\":\"${host}\",\"t\":${ts},\"tcp\":$1,\"udp\":$2,\"syn\":$3,\"tcp_b\":$4,\"udp_b\":$5,\"d_ban\":$6,\"d_mal\":$7,\"d_icmp\":$8,\"d_syn\":$9,\"d_udp\":${10},\"d_conn\":${11},\"d_web\":${12},\"d_bytes\":${13},\"rx_b\":${rxb},\"rx_p\":${rxp},\"tx_b\":${txb},\"tx_p\":${txp},\"bans\":${bans_now}}" \
                 "${PANEL_URL%/}/api/antiddos/live" >/dev/null 2>&1 & )
         fi
 
@@ -622,7 +692,7 @@ cmd_attack() {
 
 set_conf() {
     local key="$1" value="$2"
-    [[ "$key" =~ ^(TCP_PORTS|UDP_PORTS|WEB_PORTS|SSH_PORT|CONN_LIMIT|SYN_RATE|SYN_BURST|UDP_RATE|UDP_BURST|ICMP_RATE|BAN_SECONDS|ATTACK_MODE|SYSCTL|PANEL_URL|PANEL_DIR|API_KEY|EXTRA_WHITELIST)$ ]] \
+    [[ "$key" =~ ^(TCP_PORTS|UDP_PORTS|WEB_PORTS|SSH_PORT|CONN_LIMIT|SYN_RATE|SYN_BURST|UDP_RATE|UDP_BURST|ICMP_RATE|BAN_SECONDS|ATTACK_MODE|SYSCTL|PANEL_URL|PANEL_DIR|API_KEY|EXTRA_WHITELIST|NET_IFACE)$ ]] \
         || fail "Clave desconocida: ${key}"
     [[ "$value" =~ ^[A-Za-z0-9:,./_\ -]*$ ]] || fail "Valor con caracteres no permitidos."
     mkdir -p "$(dirname "$CONF")"

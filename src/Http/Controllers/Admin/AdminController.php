@@ -9,6 +9,7 @@ use Illuminate\Routing\Controller;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
+use Pterodactyl\Extensions\AntiDDoS\Models\ShieldAgent;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldBlock;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldEvent;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldSetting;
@@ -20,6 +21,7 @@ use Pterodactyl\Extensions\AntiDDoS\Services\MetricsService;
 use Pterodactyl\Extensions\AntiDDoS\Services\MinecraftPorts;
 use Pterodactyl\Extensions\AntiDDoS\Services\PortAdvisor;
 use Pterodactyl\Extensions\AntiDDoS\Services\PortChanger;
+use Pterodactyl\Extensions\AntiDDoS\Services\TrafficEngine;
 use Pterodactyl\Models\Allocation;
 use Pterodactyl\Models\Server;
 
@@ -228,20 +230,56 @@ class AdminController extends Controller
         return ['rows' => $rows, 'counts' => $counts];
     }
 
-    /** Datos de las graficas de trafico (JSON, los pide el navegador cada 30 s). */
+    /** Datos de las graficas de trafico (JSON, los pide el navegador cada segundo en vivo). */
     public function trafficData(Request $request): JsonResponse
     {
         $data = $request->validate([
             'range' => 'nullable|in:live,' . implode(',', array_keys(MetricsService::RANGES)),
+            'view' => 'nullable|in:' . implode(',', TrafficEngine::VIEWS),
             'host' => ['nullable', 'string', 'max:120', 'regex:/^[A-Za-z0-9._-]+$/'],
         ]);
 
         $range = $data['range'] ?? 'live';
+        $view = $data['view'] ?? 'network';
+        $host = $data['host'] ?? null;
+
         $response = $range === 'live'
-            ? $this->live->series($data['host'] ?? null)
-            : $this->metrics->series($range, $data['host'] ?? null);
+            ? $this->live->series($host, $view)
+            : $this->metrics->series($range, $host, $view);
+
+        $response['top'] = $this->topIps($host);
 
         return (new JsonResponse($response))->header('Cache-Control', 'no-store');
+    }
+
+    /**
+     * IPs con mas conexiones ahora (de los agentes), sumando nodos y marcando las ya bloqueadas.
+     *
+     * @return array<int, array{ip: string, conns: int, blocked: bool}>
+     */
+    protected function topIps(?string $host): array
+    {
+        $totals = [];
+
+        foreach (ShieldAgent::query()->when($host, fn ($q) => $q->where('host', $host))->get() as $agent) {
+            if (!$agent->isOnline()) {
+                continue;
+            }
+
+            foreach ((array) ($agent->payload['top_ips'] ?? []) as $row) {
+                $totals[$row['ip']] = ($totals[$row['ip']] ?? 0) + (int) $row['conns'];
+            }
+        }
+
+        arsort($totals);
+        $blocked = $this->blocks->map();
+        $out = [];
+
+        foreach (array_slice($totals, 0, 10, true) as $ip => $conns) {
+            $out[] = ['ip' => (string) $ip, 'conns' => $conns, 'blocked' => array_key_exists($ip, $blocked)];
+        }
+
+        return $out;
     }
 
     /** Cambia el puerto de un servidor (el indicado o uno recomendado al azar). */
