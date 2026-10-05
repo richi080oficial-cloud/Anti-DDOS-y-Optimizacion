@@ -12,6 +12,7 @@ Anti-DDoS para servidores de Minecraft en Pterodactyl, en dos capas:
 - Panel de administración propio: `/admin/extensions/antiddos` (estado, protección, bloqueos y eventos).
 - Comando `antiddos` con instalación, actualización, desinstalación y todo el control del firewall por consola.
 - **Estado de la instalación en el propio panel**: la pestaña *Estado* dice si está «todo instalado y funcionando» o qué falta (tablas, caché, clave, y el agente de **cada nodo**), con el comando que lo arregla. Los agentes informan al panel cada ~30 s.
+- **Detección automática de puertos**: el panel reconoce los eggs de Minecraft (Paper, Spigot, Forge, Bedrock, BungeeCord…), toma el puerto de cada servidor y lo protege solo; se actualiza en menos de un minuto al crear o mover servidores. Opcionalmente protege también sus puertos adicionales (Dynmap, voice chat, query…) y puedes elegir qué eggs cuentan como Minecraft. Los puertos manuales se suman a los detectados.
 - **Firewall editable desde el admin**: puertos TCP/UDP (`25565:25666`), límites por IP y **modo «bajo ataque»** se cambian en la pestaña *Protección* y se envían a todos los nodos sin tocar la consola. Una vez guardados, el panel manda: un `antiddos fw set` manual en el nodo se sobrescribe en la siguiente sincronización.
 - Los bloqueos del panel (manuales o automáticos) **se propagan a todos los nodos** en menos de un minuto.
 

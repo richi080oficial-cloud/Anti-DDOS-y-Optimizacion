@@ -14,11 +14,13 @@ use Pterodactyl\Extensions\AntiDDoS\Models\ShieldSetting;
 use Pterodactyl\Extensions\AntiDDoS\Services\BlockManager;
 use Pterodactyl\Extensions\AntiDDoS\Services\HealthCheck;
 use Pterodactyl\Extensions\AntiDDoS\Services\IpMatcher;
+use Pterodactyl\Extensions\AntiDDoS\Services\MinecraftPorts;
 
 class AdminController extends Controller
 {
     public function __construct(
         protected BlockManager $blocks,
+        protected MinecraftPorts $minecraft,
     ) {
     }
 
@@ -37,6 +39,7 @@ class AdminController extends Controller
             'health' => $health,
             'version' => $health['version'],
             'fw' => $this->firewallValues($settings, $health['agents']),
+            'mc' => ['plan' => $this->minecraft->plan(), 'eggs' => $this->minecraft->eggs()],
             'settings' => $settings,
             'blocks' => $this->blocks->active(),
             'events' => ShieldEvent::query()->orderByDesc('id')->limit(150)->get(),
@@ -107,6 +110,8 @@ class AdminController extends Controller
             'udp_rate' => $pick('fw_udp_rate', 'udp_rate', 400),
             'ban_seconds' => $pick('fw_ban_seconds', 'ban_seconds', 900),
             'attack' => (string) ($settings['fw_attack_mode'] ?? '') === '1',
+            'auto' => (bool) ($settings['fw_auto'] ?? true),
+            'extra' => (bool) ($settings['fw_extra_ports'] ?? true),
         ];
     }
 
@@ -149,31 +154,55 @@ class AdminController extends Controller
     public function updateFirewall(Request $request): RedirectResponse
     {
         $data = $request->validate([
-            'tcp' => 'required|string|max:200',
+            'tcp' => 'nullable|string|max:200',
             'udp' => 'nullable|string|max:200',
             'conn_limit' => 'required|integer|min:3|max:1000',
             'syn_rate' => 'required|integer|min:2|max:1000',
             'udp_rate' => 'required|integer|min:20|max:100000',
             'ban_seconds' => 'required|integer|min:30|max:604800',
+            'eggs' => 'nullable|array',
+            'eggs.*' => 'integer|min:1',
         ]);
 
-        $tcp = $this->portList($data['tcp'], 'Puertos TCP');
+        $tcp = $this->portList($data['tcp'] ?? '', 'Puertos TCP');
         $udp = $this->portList($data['udp'] ?? '', 'Puertos UDP');
+        $auto = $request->boolean('auto');
 
-        if ($tcp === null) {
-            return $this->tab('shield')->with('antiddos:error', 'Indica al menos un puerto TCP de Minecraft.');
+        if ($tcp === null && !$auto) {
+            return $this->tab('shield')->with('antiddos:error', 'Indica al menos un puerto TCP, o activa la detección automática de servidores de Minecraft.');
+        }
+
+        // Eggs que cuentan como Minecraft: si coinciden con los detectados por nombre,
+        // se guarda vacio (asi los eggs nuevos se reconocen solos).
+        $eggsValue = '';
+
+        if ($request->has('eggs_present')) {
+            $selected = collect($data['eggs'] ?? [])->map(fn ($v) => (int) $v)->unique()->sort()->values();
+            $detected = $this->minecraft->eggs()->where('detected', true)->pluck('id')->map(fn ($v) => (int) $v)->sort()->values();
+            $eggsValue = $selected->all() === $detected->all() ? '' : ($selected->isEmpty() ? '0' : $selected->implode(','));
         }
 
         ShieldSetting::write([
-            'fw_tcp_ports' => $tcp,
+            'fw_tcp_ports' => $tcp ?? '-',
             'fw_udp_ports' => $udp ?? '-',
             'fw_conn_limit' => $data['conn_limit'],
             'fw_syn_rate' => $data['syn_rate'],
             'fw_udp_rate' => $data['udp_rate'],
             'fw_ban_seconds' => $data['ban_seconds'],
+            'fw_auto' => $auto,
+            'fw_extra_ports' => $request->boolean('extra'),
+            'fw_egg_ids' => $eggsValue,
         ]);
 
-        ShieldEvent::record('settings', "Firewall de los nodos actualizado (TCP {$tcp}" . ($udp ? ", UDP {$udp}" : '') . ')', $request->ip(), ['user_id' => $request->user()?->id]);
+        $this->minecraft->flush();
+        $plan = $this->minecraft->plan();
+
+        ShieldEvent::record(
+            'settings',
+            'Firewall de los nodos actualizado (TCP ' . ($plan['tcp'] ?: '—') . ', UDP ' . ($plan['udp'] ?: '—') . ($auto ? ', detección automática' : '') . ')',
+            $request->ip(),
+            ['user_id' => $request->user()?->id]
+        );
 
         return $this->tab('shield')->with('antiddos:success', 'Firewall guardado. Los nodos lo aplicarán en menos de un minuto.');
     }

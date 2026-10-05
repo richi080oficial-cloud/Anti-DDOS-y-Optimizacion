@@ -182,8 +182,29 @@ class BlockManager
             'fw_attack_mode' => 'ATTACK_MODE',
         ];
 
+        // Con el firewall gestionado y la deteccion activa, los puertos que se envian
+        // son los manuales mas los de los servidores de Minecraft detectados.
+        $override = [];
+
+        if ((string) ($settings['fw_tcp_ports'] ?? '') !== '' && !empty($settings['fw_auto'])) {
+            $plan = app(MinecraftPorts::class)->plan();
+
+            if ($plan['tcp'] !== '') {
+                $override['fw_tcp_ports'] = $plan['tcp'];
+            }
+
+            if ($plan['udp'] !== '') {
+                $override['fw_udp_ports'] = $plan['udp'];
+            }
+        }
+
         foreach ($map as $key => $agentKey) {
-            $value = trim((string) ($settings[$key] ?? ''));
+            $value = trim((string) ($override[$key] ?? $settings[$key] ?? ''));
+
+            // Un TCP_PORTS vacio ("-") dejaria al nodo sin proteccion: no se envia nunca.
+            if ($agentKey === 'TCP_PORTS' && $value === '-') {
+                continue;
+            }
 
             if ($value !== '' && preg_match('/^[0-9:,-]+$/', $value)) {
                 $lines[] = "C {$agentKey} {$value}";

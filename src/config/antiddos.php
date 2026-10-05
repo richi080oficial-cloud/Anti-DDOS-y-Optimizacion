@@ -45,6 +45,12 @@ return [
         'fw_udp_rate' => '',
         'fw_ban_seconds' => '',
         'fw_attack_mode' => '',   // '1' = modo bajo ataque, '0' = normal
+
+        // Deteccion automatica de puertos a partir de los servidores de Minecraft
+        // (solo actua cuando el firewall esta gestionado desde el panel).
+        'fw_auto' => true,          // proteger los puertos de los servidores de Minecraft
+        'fw_extra_ports' => true,   // ...incluidas sus asignaciones adicionales (Dynmap, voice chat...)
+        'fw_egg_ids' => '',         // eggs que cuentan como Minecraft (vacio = deteccion por nombre)
     ],
 
     // Rutas que NUNCA se cuentan ni se bloquean (patrones de Request::is()).

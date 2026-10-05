@@ -200,16 +200,46 @@
                             @unless ($fw['managed'])
                                 <div class="alert w" style="margin-bottom:14px;">Se muestran los valores que ya tiene el nodo. Al guardar, el panel pasa a controlarlos y los envía a <b>todos</b> los nodos.</div>
                             @endunless
-                            <div class="f-row">
+
+                            <label class="check"><input type="checkbox" name="auto" value="1" {{ old('auto', $fw['auto']) ? 'checked' : '' }}>
+                                <span>Detectar automáticamente los servidores de Minecraft y proteger sus puertos
+                                    <small>El panel reconoce los eggs de Minecraft (Paper, Spigot, Forge, Bedrock, BungeeCord…), toma el puerto de cada servidor y lo protege solo. Si creas, mueves o borras un servidor, se actualiza en menos de un minuto.</small></span></label>
+                            <label class="check" style="margin-left:26px;"><input type="checkbox" name="extra" value="1" {{ old('extra', $fw['extra']) ? 'checked' : '' }}>
+                                <span>Proteger también los puertos adicionales de esos servidores
+                                    <small>Dynmap, voice chat, query… (todo lo que no es el puerto principal). Es más seguro: la IP del servidor queda protegida en todos sus puertos.</small></span></label>
+
+                            <div class="alert {{ $mc['plan']['tcp'] !== '' || $mc['plan']['udp'] !== '' ? 's' : 'w' }}" style="margin:12px 0;">
+                                @if ($fw['managed'] && $fw['auto'])
+                                    <b>Ahora se protegen</b> ({{ $mc['plan']['servers'] }} servidor(es) de Minecraft detectado(s)):<br>
+                                    TCP <code>{{ $mc['plan']['tcp'] ?: '—' }}</code> · UDP <code>{{ $mc['plan']['udp'] ?: '—' }}</code>
+                                @elseif ($fw['auto'])
+                                    <b>Se han detectado {{ $mc['eggs']->where('selected', true)->sum('servers') }} servidor(es) de Minecraft.</b>
+                                    Al guardar se protegerán sus puertos: TCP <code>{{ $mc['plan']['auto_tcp'] ?: '—' }}</code> · UDP <code>{{ $mc['plan']['auto_udp'] ?: '—' }}</code>
+                                @else
+                                    Detección automática desactivada: solo se protegen los puertos manuales de abajo.
+                                @endif
+                            </div>
+
+                            <details>
+                                <summary>Eggs que cuentan como Minecraft ({{ $mc['eggs']->where('selected', true)->count() }} marcados)</summary>
+                                <p class="muted small" style="margin:10px 0;">Marcados por defecto los que el panel reconoce por su nombre. Marca o desmarca los que quieras; los de Bedrock/PocketMine/Nukkit/Geyser protegen su puerto por UDP.</p>
+                                <input type="hidden" name="eggs_present" value="1">
+                                @foreach ($mc['eggs'] as $egg)
+                                    <label class="check"><input type="checkbox" name="eggs[]" value="{{ $egg['id'] }}" {{ $egg['selected'] ? 'checked' : '' }}>
+                                        <span>{{ $egg['name'] }} <span class="muted small">· {{ $egg['nest'] }} · {{ $egg['servers'] }} servidor(es){{ $egg['bedrock'] ? ' · UDP' : '' }}</span></span></label>
+                                @endforeach
+                            </details>
+
+                            <div class="f-row" style="margin-top:12px;">
                                 <div class="f">
-                                    <label for="tcp">Puertos TCP de Minecraft</label>
-                                    <input class="form-control" id="tcp" name="tcp" value="{{ old('tcp', $fw['tcp']) }}" placeholder="25565:25666" required>
-                                    <small>Un puerto (<code>25565</code>), un rango (<code>25565:25666</code>) o varios separados por comas.</small>
+                                    <label for="tcp">Puertos TCP manuales (opcional)</label>
+                                    <input class="form-control" id="tcp" name="tcp" value="{{ old('tcp', $fw['tcp']) }}" placeholder="25565:25666">
+                                    <small>Se suman a los detectados. Un puerto (<code>25565</code>), un rango (<code>25565:25666</code>) o varios con comas.</small>
                                 </div>
                                 <div class="f">
-                                    <label for="udp">Puertos UDP (Bedrock/Geyser)</label>
+                                    <label for="udp">Puertos UDP manuales (opcional)</label>
                                     <input class="form-control" id="udp" name="udp" value="{{ old('udp', $fw['udp']) }}" placeholder="19132">
-                                    <small>Déjalo vacío si no usas Bedrock.</small>
+                                    <small>Para Bedrock/Geyser u otros servicios UDP.</small>
                                 </div>
                             </div>
                             <details>
