@@ -447,9 +447,10 @@ cmd_status() {
     fi
     if have iptables && ipt -t raw -L ANTIDDOS -n >/dev/null 2>&1; then
         echo
-        echo "Paquetes descartados (contadores desde el último apply):"
-        ipt -t raw -L ANTIDDOS -v -n 2>/dev/null | awk 'NR>2 && $1+0 > 0 {print "  " $0}'
-        ipt -t mangle -L ANTIDDOS_M -v -n 2>/dev/null | awk 'NR>2 && $1+0 > 0 {print "  " $0}'
+        echo "Paquetes frenados (desde el último apply): $(dropped_packets)"
+        echo "Tráfico de confianza que se deja pasar sin límites (lista blanca): $(ipt -t raw -L ANTIDDOS -v -n -x 2>/dev/null | awk '$3=="RETURN" {s+=$1} END{print s+0}') paquetes"
+        ipt -t raw -L ANTIDDOS -v -n 2>/dev/null | awk 'NR>2 && $1+0 > 0 && $3!="RETURN" {print "  " $0}'
+        ipt -t mangle -L ANTIDDOS_M -v -n 2>/dev/null | awk 'NR>2 && $1+0 > 0 && $3!="RETURN" {print "  " $0}'
     fi
 }
 
