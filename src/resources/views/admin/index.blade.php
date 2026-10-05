@@ -389,7 +389,7 @@
                     </div>
                     <p class="muted small" id="ad-empty" style="margin:12px 0 0; display:none;"></p>
                     <p class="muted small" style="margin:12px 0 0;">
-                        <b>En vivo</b> muestra los últimos 5 minutos con un punto cada 3 s (se actualiza cada 3 s mientras miras esta pestaña); los demás rangos usan el historial guardado. Cada punto es la <b>velocidad media real</b> del tramo, en paquetes por minuto (no se muestran tramos a medias ni se reparten huecos en picos falsos).
+                        <b>En vivo</b> muestra los últimos 5 minutos con un punto por segundo (se actualiza cada segundo mientras miras esta pestaña); los demás rangos usan el historial guardado. Cada punto es la <b>velocidad media real</b> del tramo, en paquetes por minuto (no se muestran tramos a medias ni se reparten huecos en picos falsos).
                         Los <b>huecos</b> de la línea significan que el agente no informó en ese momento.
                         <b>Frenados</b> cuenta todo lo que descarta el firewall (IPs bloqueadas, límites por IP, paquetes malformados, ping, SSH y web si están activados), no solo lo dirigido a Minecraft.
                         <b>Conexiones nuevas, TCP y UDP</b> cuentan solo el tráfico externo hacia tus puertos protegidos (sin la lista blanca ni el tráfico interno de Docker).
@@ -756,7 +756,7 @@
                     if (!state.data.has_data) {
                         empty.style.display = 'block';
                         empty.textContent = state.range === 'live'
-                            ? 'Aún no llegan datos en vivo. Hace falta el servicio antiddos-live en el nodo (versión 1.5.0): actualízalo con «sudo antiddos update --force». Mientras tanto puedes usar los rangos de 1 h o más.'
+                            ? 'Aún no llegan datos en vivo. Hace falta el servicio antiddos-live en el nodo (versión 1.6.0): actualízalo con «sudo antiddos update --force». Mientras tanto puedes usar los rangos de 1 h o más.'
                             : (state.data.last_sample
                                 ? 'Todavía no hay suficientes datos en este periodo (hacen falta al menos dos muestras seguidas del agente). Espera un minuto.'
                                 : 'Aún no hay datos. Los agentes envían sus contadores cada ~30 s; si el agente es anterior a la versión 1.4.0, actualízalo con: sudo antiddos update --force');
@@ -775,10 +775,10 @@
                         html = '<span class="muted">Cargando…</span>';
                     } else if (!d.last_sample) {
                         html = '<span style="color:var(--warn)">● Sin datos todavía</span>';
-                    } else if (age > (state.range === 'live' ? 15 : 120)) {
+                    } else if (age > (state.range === 'live' ? 6 : 120)) {
                         html = '<span style="color:var(--err)">● Sin datos recientes del agente</span> · último dato hace ' + ago(age) + ' (el agente no está informando)';
                     } else {
-                        html = '<span style="color:var(--ok)">● En directo</span> · último dato del agente hace ' + ago(age) + ' · se actualiza cada ' + (state.range === 'live' ? '3' : '15') + ' s';
+                        html = '<span style="color:var(--ok)">● En directo</span> · último dato del agente hace ' + ago(age) + ' · se actualiza ' + (state.range === 'live' ? 'cada segundo' : 'cada 15 s');
                     }
                     el.innerHTML = html;
                 }
@@ -818,8 +818,8 @@
                 setInterval(function () {
                     if (document.hidden) { return; }
                     var watching = state.range === 'live' && $('#pane-traffic').classList.contains('active');
-                    if (Date.now() - state.tried >= (watching ? 2800 : 14800)) { load(); }
-                }, 1000);
+                    if (Date.now() - state.tried >= (watching ? 950 : 14800)) { load(); }
+                }, 250);
                 setInterval(live, 1000);
                 load();
             }

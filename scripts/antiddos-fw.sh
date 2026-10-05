@@ -398,12 +398,12 @@ send_heartbeat() {
     return 0
 }
 
-# ── Modo «en vivo»: contadores cada 3 s para la grafica del panel ─────────────
+# ── Modo «en vivo»: contadores cada segundo para la grafica del panel ─────────────
 LIVE_DIR="/var/lib/antiddos"
 LIVE_RING="${LIVE_DIR}/live.ring"
 LIVE_JSON="${LIVE_DIR}/live.json"
-LIVE_EVERY=3
-LIVE_KEEP=100        # 100 muestras x 3 s = 5 minutos
+LIVE_EVERY=1
+LIVE_KEEP=300        # 300 muestras x 1 s = 5 minutos
 
 # "paquetes_frenados syn tcp udp ip_bloqueadas": una sola lectura de raw y otra de mangle.
 read_counters() {
@@ -419,7 +419,7 @@ read_counters() {
         END { printf "%d %d %d %d %d\n", d + dm, syn, tcp, udp, b }' <<<"$raw"
 }
 
-# Bucle del servicio antiddos-live: lee los contadores cada 3 s, guarda los ultimos
+# Bucle del servicio antiddos-live: lee los contadores cada segundo, guarda los ultimos
 # 5 minutos en un archivo que el panel lee directamente (panel en la misma maquina)
 # y, si el panel esta en otra, envia cada muestra por HTTPS.
 cmd_watch() {
@@ -427,6 +427,7 @@ cmd_watch() {
     mkdir -p "$LIVE_DIR"; chmod 755 "$LIVE_DIR"
     : > "$LIVE_RING"
     info "Modo en vivo activo: contadores cada ${LIVE_EVERY} s (${LIVE_JSON})."
+    local loops=0
 
     local ts line host
     host="$(hostname)"
@@ -437,13 +438,17 @@ cmd_watch() {
         line="$(read_counters)"
         echo "${ts} ${line}" >> "$LIVE_RING"
 
-        # Conserva solo las ultimas muestras (escritura atomica).
-        tail -n "$LIVE_KEEP" "$LIVE_RING" > "${LIVE_RING}.tmp" && mv -f "${LIVE_RING}.tmp" "$LIVE_RING"
+        # El archivo se recorta cada 60 vueltas (no en cada una, para gastar poco);
+        # el JSON solo incluye siempre las ultimas LIVE_KEEP muestras.
+        loops=$((loops + 1))
+        if (( loops % 60 == 0 )); then
+            tail -n "$LIVE_KEEP" "$LIVE_RING" > "${LIVE_RING}.tmp" && mv -f "${LIVE_RING}.tmp" "$LIVE_RING"
+        fi
 
-        awk -v host="$host" '
+        tail -n "$LIVE_KEEP" "$LIVE_RING" | awk -v host="$host" '
             BEGIN { printf "{\"host\":\"%s\",\"samples\":[", host }
             { printf "%s{\"t\":%d,\"dropped\":%s,\"syn\":%s,\"tcp\":%s,\"udp\":%s,\"bans\":%s}", (NR > 1 ? "," : ""), $1, $2, $3, $4, $5, $6 }
-            END { print "]}" }' "$LIVE_RING" > "${LIVE_JSON}.tmp" && chmod 644 "${LIVE_JSON}.tmp" && mv -f "${LIVE_JSON}.tmp" "$LIVE_JSON"
+            END { print "]}" }' > "${LIVE_JSON}.tmp" && chmod 644 "${LIVE_JSON}.tmp" && mv -f "${LIVE_JSON}.tmp" "$LIVE_JSON"
 
         # Panel en otra maquina: se envia la muestra (en segundo plano, sin frenar el bucle).
         if ! panel_is_local && [[ -n "$PANEL_URL" && -n "$API_KEY" ]] && have curl; then

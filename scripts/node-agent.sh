@@ -137,7 +137,7 @@ EOF
 
     cat > "${UNIT_DIR}/antiddos-live.service" <<EOF
 [Unit]
-Description=Anti-DDoS y Optimización: contadores en vivo (cada 3 s) para la gráfica del panel
+Description=Anti-DDoS y Optimización: contadores en vivo (cada segundo) para la gráfica del panel
 After=antiddos-fw.service
 
 [Service]

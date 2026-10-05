@@ -5,11 +5,11 @@ namespace Pterodactyl\Extensions\AntiDDoS\Services;
 use Illuminate\Support\Facades\Cache;
 
 /**
- * Trafico «en vivo» (muestras cada 3 s) de los ultimos 5 minutos.
+ * Trafico «en vivo» (muestras cada segundo) de los ultimos 5 minutos.
  *
  * De donde salen las muestras:
  *   - Agente en la MISMA maquina que el panel: el servicio antiddos-live escribe
- *     /var/lib/antiddos/live.json cada 3 s y el panel lo lee directamente.
+ *     /var/lib/antiddos/live.json cada segundo y el panel lo lee directamente.
  *   - Agente en OTRA maquina: envia cada muestra a POST /api/antiddos/live y se
  *     guarda en la cache del panel (Redis), sin tocar la base de datos.
  *
@@ -21,11 +21,11 @@ class LiveTraffic
 {
     public const FILE = '/var/lib/antiddos/live.json';
 
-    public const STEP = 3;            // segundos entre muestras
+    public const STEP = 1;            // segundos por punto
     public const WINDOW = 300;        // ventana mostrada (5 min)
-    public const KEEP = 100;          // muestras guardadas por nodo
-    public const GAP = 15;            // mas de esto entre muestras = hueco
-    public const STALE = 15;          // sin muestras en este tiempo = datos viejos
+    public const KEEP = 300;          // muestras guardadas por nodo
+    public const GAP = 5;             // mas de esto entre muestras = hueco
+    public const STALE = 6;           // sin muestras en este tiempo = datos viejos
 
     protected const KEYS = ['dropped', 'syn', 'tcp', 'udp'];
 
@@ -156,11 +156,18 @@ class LiveTraffic
 
                     if ($dt > 0 && $dt <= self::GAP && $idx >= 0 && $idx < $count) {
                         $intervals++;
+                        $from = max(0, intdiv($prev['t'] - $start, self::STEP) + 1);
 
                         foreach (self::KEYS as $k) {
                             $delta = $s[$k] >= $prev[$k] ? $s[$k] - $prev[$k] : $s[$k];
                             $totals[$k] += $delta;
-                            $rate[$name][$idx][$k] = $delta / $dt * 60;
+                            $perMin = $delta / $dt * 60;
+
+                            // Si el bucle tardo mas de 1 s, los segundos intermedios llevan la
+                            // misma velocidad media (es lo que de verdad ocurrio en ese tramo).
+                            for ($j = $from; $j <= $idx; $j++) {
+                                $rate[$name][$j][$k] = $perMin;
+                            }
                         }
                     }
                 }
