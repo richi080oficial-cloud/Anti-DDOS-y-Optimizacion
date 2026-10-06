@@ -548,10 +548,10 @@ class AdminController extends Controller
                 $request->boolean('force')
             );
         } catch (\DomainException|\RuntimeException $e) {
-            return $this->tab('blocks')->with('antiddos:error', 'No se bloquea: ' . $e->getMessage());
+            return $this->tab('asn')->with('antiddos:error', 'No se bloquea: ' . $e->getMessage());
         }
 
-        return $this->tab('blocks')->with('antiddos:success', sprintf(
+        return $this->tab('asn')->with('antiddos:success', sprintf(
             '%s bloqueado: %d rango(s), %s IPs. El panel ya le responde 403 y los nodos lo aplican en menos de un minuto.',
             $block->label(), $block->prefix_count, number_format($block->ip_count, 0, ',', '.')
         ));
@@ -564,10 +564,10 @@ class AdminController extends Controller
         try {
             $done = $this->nets->unblock($data['kind'], $data['value']);
         } catch (\DomainException $e) {
-            return $this->tab('blocks')->with('antiddos:error', $e->getMessage());
+            return $this->tab('asn')->with('antiddos:error', $e->getMessage());
         }
 
-        return $this->tab('blocks')->with($done ? 'antiddos:success' : 'antiddos:error', $done
+        return $this->tab('asn')->with($done ? 'antiddos:success' : 'antiddos:error', $done
             ? 'Desbloqueado. Los nodos lo aplican en menos de un minuto.'
             : 'No estaba bloqueado.');
     }
@@ -584,7 +584,7 @@ class AdminController extends Controller
             $lines[] = "{$label}: {$result}";
         }
 
-        return $this->tab('blocks')->with('antiddos:success', $lines === [] ? 'No hay redes bloqueadas.' : 'Rangos actualizados — ' . implode(' · ', $lines));
+        return $this->tab('asn')->with('antiddos:success', $lines === [] ? 'No hay redes bloqueadas.' : 'Rangos actualizados — ' . implode(' · ', $lines));
     }
 
     /** Añade una IP a la lista blanca (y la desbloquea): para corregir un falso positivo. */

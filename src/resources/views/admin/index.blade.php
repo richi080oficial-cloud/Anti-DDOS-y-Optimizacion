@@ -92,6 +92,9 @@
         .ad .issue { margin: 2px 0; font-size: 12.5px; }
         .ad .portform { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
         .ad .portform input[type=number] { width: 100px; }
+        .ad .quick-asn { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 12px 16px; border-left: 6px solid var(--err); }
+        .ad .quick-asn .lbl { display: flex; flex-direction: column; flex: 0 1 240px; }
+        .ad .quick-asn input[name=value] { flex: 1 1 180px; max-width: 280px; }
     </style>
 
     <div class="ad">
@@ -124,12 +127,30 @@
             </div>
         </div>
 
+        {{-- ─────────── Bloqueo rápido de un operador (ASN), visible en todas las pestañas ─────────── --}}
+        <form action="{{ route('admin.extensions.antiddos.networks.store') }}" method="POST" class="card quick-asn"
+              onsubmit="var v = this.querySelector('[name=value]').value.trim(); return v !== '' && confirm('¿Bloquear el operador ' + v + ' ENTERO (todas sus IPs, también las nuevas) en el panel y en todos los nodos?');">
+            @csrf
+            <input type="hidden" name="kind" value="asn">
+            <input type="hidden" name="reason" value="Bloqueo rápido (ASN)">
+            <div class="lbl">🚫 <b>Bloquear operador (ASN)</b><span class="muted small">Corta todas sus IPs, también las que use después</span></div>
+            <input class="form-control" name="value" placeholder="AS199585" maxlength="120" required>
+            <select class="form-control" name="hours" style="width:auto;">
+                <option value="">Permanente</option>
+                <option value="24">24 horas</option>
+                <option value="168">7 días</option>
+            </select>
+            <button class="btn btn-danger" type="submit">Bloquear ASN</button>
+            <a class="small" data-goto="asn" style="cursor:pointer;">{{ $netBlocks->count() }} bloqueado(s) · ver lista</a>
+        </form>
+
         <ul class="tabs" id="ad-tabs">
             <li><a data-tab="status">Estado</a></li>
             <li><a data-tab="traffic">Tráfico</a></li>
             <li><a data-tab="shield">Protección</a></li>
             <li><a data-tab="ports">Puertos @if ($ports['counts']['error'] + $ports['counts']['warn'] > 0)<span class="pill {{ $ports['counts']['error'] > 0 ? 'error' : 'warn' }}">{{ $ports['counts']['error'] + $ports['counts']['warn'] }}</span>@endif</a></li>
-            <li><a data-tab="blocks">Bloqueos ({{ $blocks->count() + $netBlocks->count() }})</a></li>
+            <li><a data-tab="asn">🚫 Operadores (ASN) ({{ $netBlocks->count() }})</a></li>
+            <li><a data-tab="blocks">Bloqueos de IPs ({{ $blocks->count() }})</a></li>
             <li><a data-tab="events">Eventos</a></li>
         </ul>
 
@@ -607,8 +628,8 @@
             </div>
         </div>
 
-        {{-- ═══════════════════════ BLOQUEOS ═══════════════════════ --}}
-        <div class="pane" id="pane-blocks">
+        {{-- ═══════════════════════ OPERADORES (ASN) Y PAÍSES ═══════════════════════ --}}
+        <div class="pane" id="pane-asn">
             <div class="grid">
                 <div class="col">
                     <form action="{{ route('admin.extensions.antiddos.networks.store') }}" method="POST" class="card" id="ad-netform">
@@ -688,7 +709,10 @@
                     </div>
                 </div>
             </div>
+        </div>
 
+        {{-- ═══════════════════════ BLOQUEOS DE IPs ═══════════════════════ --}}
+        <div class="pane" id="pane-blocks">
             <div class="grid">
                 <div class="col">
                     <form action="{{ route('admin.extensions.antiddos.blocks.store') }}" method="POST" class="card">
@@ -779,6 +803,7 @@
                 try { history.replaceState(null, '', '#' + name); } catch (e) {}
             }
             tabs.forEach(function (a) { a.addEventListener('click', function () { show(a.getAttribute('data-tab')); }); });
+            $$('[data-goto]').forEach(function (a) { a.addEventListener('click', function () { show(a.getAttribute('data-goto')); }); });
             show(location.hash.replace('#', '') || 'status');
 
             // Copiar comandos
@@ -1009,7 +1034,7 @@
                     if (row.net_blocked) {
                         var p = el('span', 'pill error small', 'Operador bloqueado'); p.title = row.net_blocked; td.appendChild(p);
                     } else if (it.asn && !row.safe_reason) {
-                        var b = el('span', 'link small', 'Bloquear operador'); b.title = 'Bloquea todas las IPs de ' + it.asn + ', también las que use en el futuro';
+                        var b = el('button', 'btn btn-xs btn-danger', '🚫 Bloquear ' + it.asn); b.type = 'button'; b.style.marginTop = '4px'; b.title = 'Bloquea todas las IPs de ' + it.asn + ', también las que use en el futuro';
                         b.addEventListener('click', function () {
                             var who = it.asn + (it.org ? ' (' + it.org + ')' : '');
                             if (confirm('¿Bloquear el operador ' + who + ' ENTERO en el panel y en todos los nodos?\n\nSe cortan todas sus IPs, también las nuevas si el atacante cambia de IP, y también a los jugadores legítimos de ese operador.')) {
