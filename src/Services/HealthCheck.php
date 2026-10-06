@@ -18,7 +18,7 @@ use Pterodactyl\Models\Node;
 class HealthCheck
 {
     protected const TABLES = [
-        'antiddos_settings', 'antiddos_blocks', 'antiddos_events', 'antiddos_agents', 'antiddos_metrics',
+        'antiddos_settings', 'antiddos_blocks', 'antiddos_events', 'antiddos_agents', 'antiddos_metrics', 'antiddos_net_blocks',
     ];
 
     /**

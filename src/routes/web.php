@@ -27,6 +27,11 @@ Route::middleware(['web', 'auth', AdminAuthenticate::class])
             ->name('blocks.store');
         Route::delete('/blocks', [AdminController::class, 'unban'])->name('blocks.destroy');
 
+        // Operadores (ASN) y paises bloqueados enteros. Descargan rangos de internet: ritmo limitado.
+        Route::post('/networks', [AdminController::class, 'blockNetwork'])->middleware('throttle:20,1')->name('networks.store');
+        Route::delete('/networks', [AdminController::class, 'unblockNetwork'])->name('networks.destroy');
+        Route::post('/networks/refresh', [AdminController::class, 'refreshNetworks'])->middleware('throttle:6,1')->name('networks.refresh');
+
         Route::post('/apikey', [AdminController::class, 'rotateKey'])->name('apikey');
 
         // Origen y reputacion de IPs, politica de bloqueo y correccion de falsos positivos.

@@ -129,7 +129,7 @@
             <li><a data-tab="traffic">Tráfico</a></li>
             <li><a data-tab="shield">Protección</a></li>
             <li><a data-tab="ports">Puertos @if ($ports['counts']['error'] + $ports['counts']['warn'] > 0)<span class="pill {{ $ports['counts']['error'] > 0 ? 'error' : 'warn' }}">{{ $ports['counts']['error'] + $ports['counts']['warn'] }}</span>@endif</a></li>
-            <li><a data-tab="blocks">Bloqueos ({{ $blocks->count() }})</a></li>
+            <li><a data-tab="blocks">Bloqueos ({{ $blocks->count() + $netBlocks->count() }})</a></li>
             <li><a data-tab="events">Eventos</a></li>
         </ul>
 
@@ -611,6 +611,86 @@
         <div class="pane" id="pane-blocks">
             <div class="grid">
                 <div class="col">
+                    <form action="{{ route('admin.extensions.antiddos.networks.store') }}" method="POST" class="card" id="ad-netform">
+                        @csrf
+                        <div class="card-h"><h3>Bloquear un operador o un país</h3></div>
+                        <div class="card-b">
+                            <p class="muted" style="margin-top:0;">Si te atacan desde un operador concreto (p. ej. <code>AS199585 · Operador / residencial</code> en la tabla «Quién se está conectando»), bloquéalo entero: se cortan <b>todas sus IPs, también las nuevas</b> cuando el atacante cambie de IP.</p>
+                            <div class="f-row">
+                                <div class="f" style="flex:0 1 170px;"><label for="net-kind">Tipo</label>
+                                    <select class="form-control" id="net-kind" name="kind">
+                                        <option value="asn" {{ old('kind', 'asn') === 'asn' ? 'selected' : '' }}>Operador (ASN)</option>
+                                        <option value="country" {{ old('kind') === 'country' ? 'selected' : '' }}>País</option>
+                                    </select></div>
+                                <div class="f"><label for="net-value">Operador o país</label>
+                                    <input class="form-control" id="net-value" name="value" value="{{ old('value') }}" placeholder="AS199585" required maxlength="120">
+                                    <small id="net-hint">Número del operador: <code>AS199585</code> o <code>199585</code> (puedes pegar «AS199585 · Operador / residencial»).</small></div>
+                            </div>
+                            <div class="f-row">
+                                <div class="f"><label for="net-hours">Duración</label>
+                                    <select class="form-control" id="net-hours" name="hours">
+                                        <option value="">Permanente</option>
+                                        <option value="1">1 hora</option>
+                                        <option value="24">24 horas</option>
+                                        <option value="168">7 días</option>
+                                        <option value="720">30 días</option>
+                                    </select></div>
+                                <div class="f"><label for="net-reason">Motivo</label><input class="form-control" id="net-reason" name="reason" maxlength="190" placeholder="Ataque DDoS"></div>
+                            </div>
+                            <label class="check"><input type="checkbox" name="force" value="1"><span>Bloquear aunque sea muy grande<small>Por seguridad se pide confirmar las redes de más de 4 millones de IPs (operadores grandes o países enteros).</small></span></label>
+                            <div class="alert w" style="margin:10px 0 0;">Se bloquea a <b>todo</b> el que entre desde esa red, incluidos jugadores legítimos que usen ese operador. Tu IP, la de tus nodos, el panel, Cloudflare y la lista blanca nunca se bloquean (si la red las incluye, se rechaza).</div>
+                        </div>
+                        <div class="card-f"><button class="btn btn-danger" type="submit">Bloquear red</button></div>
+                    </form>
+                </div>
+                <div class="col-2">
+                    <div class="card">
+                        <div class="card-h"><h3>Operadores y países bloqueados</h3>
+                            @if ($netBlocks->isNotEmpty())
+                                <form action="{{ route('admin.extensions.antiddos.networks.refresh') }}" method="POST" style="display:inline;">@csrf<button class="btn btn-sm btn-default" type="submit" title="Vuelve a descargar los rangos (se hace solo cada día)">Actualizar rangos</button></form>
+                            @endif
+                        </div>
+                        <div class="tw">
+                            <table class="table">
+                                <thead><tr><th>Red</th><th>Rangos</th><th>IPs</th><th>Caduca</th><th>Motivo</th><th></th></tr></thead>
+                                <tbody>
+                                @forelse ($netBlocks as $net)
+                                    <tr>
+                                        <td><b>{{ $net->kind === 'asn' ? 'AS' . $net->value : 'País ' . $net->value }}</b>
+                                            <div class="muted small">{{ $net->kind === 'asn' ? ($net->name ?: 'Operador') : 'País entero' }} · rangos de {{ $net->source ?: '—' }}{{ $net->refreshed_at ? ', ' . $net->refreshed_at->diffForHumans() : '' }}</div>
+                                            <details style="margin:4px 0 0; padding:4px 8px; border:0;"><summary class="small muted" style="font-weight:normal;">ver rangos</summary><code class="small" style="display:block; white-space:normal; word-break:break-all;">{{ \Illuminate\Support\Str::limit(implode(', ', (array) $net->prefixes), 3000) }}</code></details></td>
+                                        <td>{{ number_format($net->prefix_count, 0, ',', '.') }}</td>
+                                        <td>{{ number_format($net->ip_count, 0, ',', '.') }}</td>
+                                        <td>{{ $net->expires_at ? $net->expires_at->diffForHumans() : 'permanente' }}</td>
+                                        <td>{{ \Illuminate\Support\Str::limit((string) $net->reason, 60) }}</td>
+                                        <td>
+                                            <form action="{{ route('admin.extensions.antiddos.networks.destroy') }}" method="POST" style="display:inline;" onsubmit="return confirm('¿Desbloquear esta red?');">
+                                                @csrf @method('DELETE')
+                                                <input type="hidden" name="kind" value="{{ $net->kind }}">
+                                                <input type="hidden" name="value" value="{{ $net->value }}">
+                                                <button class="btn btn-xs btn-default" type="submit">Desbloquear</button>
+                                            </form>
+                                        </td>
+                                    </tr>
+                                @empty
+                                    <tr><td colspan="6" class="muted">No hay operadores ni países bloqueados.</td></tr>
+                                @endforelse
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="card-f small muted">
+                            Se aplica en el <b>firewall de todos los nodos</b> (todo el tráfico de esa red, a cualquier puerto) y en el <b>panel</b> (responde 403). Los rangos se actualizan solos cada día por si el operador anuncia rangos nuevos.
+                            @if ($cfExpression)
+                                <div style="margin-top:10px;"><b>Si el panel está detrás de Cloudflare</b>, bloquéalo también allí para que esas peticiones ni lleguen a tu servidor: Cloudflare → tu dominio → <i>Security → WAF → Custom rules</i> → <i>Create rule</i> → <i>Edit expression</i>, pega esto y elige la acción <b>Block</b>:
+                                    <pre>{{ $cfExpression }}<button type="button" class="btn btn-xs btn-default copy">Copiar</button></pre></div>
+                            @endif
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid">
+                <div class="col">
                     <form action="{{ route('admin.extensions.antiddos.blocks.store') }}" method="POST" class="card">
                         @csrf
                         <div class="card-h"><h3>Bloquear una IP</h3></div>
@@ -671,7 +751,7 @@
                         @forelse ($events as $event)
                             <tr>
                                 <td style="white-space:nowrap;">{{ $event->created_at->format('Y-m-d H:i:s') }}</td>
-                                <td><span class="pill {{ in_array($event->type, ['auto-ban', 'ban', 'attack'], true) ? 'error' : '' }}">{{ $event->type }}</span></td>
+                                <td><span class="pill {{ in_array($event->type, ['auto-ban', 'ban', 'net-ban', 'attack'], true) ? 'error' : '' }}">{{ $event->type }}</span></td>
                                 <td>{{ $event->ip ?: '—' }}</td>
                                 <td>{{ $event->message }}</td>
                             </tr>
@@ -714,6 +794,23 @@
                 });
             });
 
+
+            // ───────── Bloqueo de operadores / países ─────────
+            var netKind = $('#net-kind');
+            if (netKind) {
+                var netHint = function () {
+                    var asn = netKind.value === 'asn';
+                    $('#net-value').placeholder = asn ? 'AS199585' : 'PL';
+                    $('#net-hint').innerHTML = asn
+                        ? 'Número del operador: <code>AS199585</code> o <code>199585</code> (puedes pegar «AS199585 · Operador / residencial»).'
+                        : 'Código de 2 letras del país: <code>PL</code>, <code>RU</code>, <code>CN</code>… Bloquea el país entero.';
+                };
+                netKind.addEventListener('change', netHint); netHint();
+                $('#ad-netform').addEventListener('submit', function (e) {
+                    var v = $('#net-value').value.trim();
+                    if (!confirm('¿Bloquear ' + (netKind.value === 'asn' ? 'el operador ' : 'el país ') + v + ' entero en el panel y en todos los nodos? También se bloqueará a los jugadores legítimos de esa red.')) { e.preventDefault(); }
+                });
+            }
 
             // ───────── Puertos ─────────
             var prow = $$('#ad-ports tbody tr[data-name]');
@@ -768,6 +865,7 @@
                 var URL_BLOCK = @json(route('admin.extensions.antiddos.blocks.store'));
                 var CSRF = @json(csrf_token());
                 var URL_WL = @json(route('admin.extensions.antiddos.whitelist.add'));
+                var URL_NET = @json(route('admin.extensions.antiddos.networks.store'));
 
                 var PS = { ps: ['por segundo', 1], pm: ['por minuto', 60] };
                 var VIEWS = {
@@ -783,8 +881,8 @@
                     },
                     reasons: {
                         units: PS, unit: 'ps', stacked: true,
-                        series: [['d_ban', 'IP bloqueada', '#dd4b39'], ['d_mal', 'Paquetes malformados', '#e67e22'], ['d_icmp', 'Ping (ICMP)', '#f1c40f'], ['d_syn', 'Límite de conexiones nuevas / SSH', '#9b59b6'], ['d_udp', 'Límite de UDP', '#3498db'], ['d_conn', 'Límite de conexiones simultáneas', '#1abc9c'], ['d_web', 'Límite web', '#95a5a6']],
-                        note: 'Por qué el firewall frena paquetes, apilado: la altura total es todo lo frenado. Si domina «IP bloqueada», los atacantes ya estaban baneados; si domina «Límite de conexiones nuevas», hay un SYN flood en curso.'
+                        series: [['d_ban', 'IP u operador bloqueado', '#dd4b39'], ['d_mal', 'Malformados / fuera de conexión', '#e67e22'], ['d_icmp', 'Ping (ICMP)', '#f1c40f'], ['d_syn', 'Límite de conexiones nuevas / SSH', '#9b59b6'], ['d_udp', 'Límite de UDP / amplificación', '#3498db'], ['d_conn', 'Límite de conexiones simultáneas', '#1abc9c'], ['d_web', 'Límite web', '#95a5a6']],
+                        note: 'Por qué el firewall frena paquetes, apilado: la altura total es todo lo frenado. Si domina «IP u operador bloqueado», los atacantes ya estaban bloqueados; si domina «Límite de conexiones nuevas», hay un SYN flood en curso; «fuera de conexión» son floods de ACK/RST sin conexión abierta y «amplificación» son respuestas falsas de DNS/NTP/memcached… dirigidas a tus puertos.'
                     }
                 };
                 var state = { view: 'network', range: 'live', host: '', data: null, smooth: 1, scale: 'lin', paused: false, vis: {}, units: {}, loadedAt: 0, tried: 0, loading: false, failing: false, open: {}, topSig: '', fwSig: '' };
@@ -899,6 +997,30 @@
                     if (facts.length) { td.appendChild(el('div', 'muted', facts.join(' · '))); }
                     tr.appendChild(td); return tr;
                 }
+                // Botón «Bloquear operador» (ASN entero) bajo el proveedor de una IP.
+                function netCell(row) {
+                    var it = row.intel || {}, td = el('td', 'net');
+                    td.appendChild(document.createTextNode(it.org || '—'));
+                    if (it.asn || it.type) { td.appendChild(el('small', '', [it.asn, TYPES[it.type] && it.type !== 'unknown' ? TYPES[it.type] : ''].filter(Boolean).join(' · '))); }
+                    return netActions(row, td);
+                }
+                function netActions(row, td) {
+                    var it = row.intel || {};
+                    if (row.net_blocked) {
+                        var p = el('span', 'pill error small', 'Operador bloqueado'); p.title = row.net_blocked; td.appendChild(p);
+                    } else if (it.asn && !row.safe_reason) {
+                        var b = el('span', 'link small', 'Bloquear operador'); b.title = 'Bloquea todas las IPs de ' + it.asn + ', también las que use en el futuro';
+                        b.addEventListener('click', function () {
+                            var who = it.asn + (it.org ? ' (' + it.org + ')' : '');
+                            if (confirm('¿Bloquear el operador ' + who + ' ENTERO en el panel y en todos los nodos?\n\nSe cortan todas sus IPs, también las nuevas si el atacante cambia de IP, y también a los jugadores legítimos de ese operador.')) {
+                                post(URL_NET, { kind: 'asn', value: it.asn, reason: 'Desde la gráfica de tráfico (IP ' + row.ip + ')' });
+                            }
+                        });
+                        td.appendChild(el('br')); td.appendChild(b);
+                    }
+                    return td;
+                }
+
                 function toggle(ip) { state.open[ip] = !state.open[ip]; state.topSig = ''; state.fwSig = ''; renderTop(); renderFwBans(); }
 
                 function renderTop() {
@@ -913,13 +1035,11 @@
                         var tdIp = el('td'); var code = el('code', '', row.ip); tdIp.appendChild(code);
                         tdIp.appendChild(document.createTextNode(' ')); var more = el('span', 'link small', state.open[row.ip] ? 'ocultar' : 'detalles'); more.addEventListener('click', function () { toggle(row.ip); }); tdIp.appendChild(more);
                         tr.appendChild(tdIp);
-                        var tdNet = el('td', 'net'); tdNet.appendChild(document.createTextNode(it.org || '—'));
-                        if (it.asn || it.type) { tdNet.appendChild(el('small', '', [it.asn, TYPES[it.type] && it.type !== 'unknown' ? TYPES[it.type] : ''].filter(Boolean).join(' · '))); }
-                        tr.appendChild(tdNet);
+                        tr.appendChild(netCell(row));
                         tr.appendChild(el('td', '', String(row.conns)));
                         tr.appendChild(verdictCell(row));
                         var act = el('td'); act.style.whiteSpace = 'nowrap';
-                        if (row.blocked) { act.appendChild(el('span', 'pill error', 'Bloqueada')); }
+                        if (row.blocked || row.net_blocked) { act.appendChild(el('span', 'pill error', 'Bloqueada')); }
                         else if (row.safe_reason) { var s1 = el('span', 'pill ok', 'Protegida'); s1.title = row.safe_reason; act.appendChild(s1); }
                         else {
                             var mal = it.verdict === 'malicious', minutes = mal ? 1440 : 60;
@@ -941,7 +1061,7 @@
                     var tb = $('#ad-fwbans'), list = (state.data && state.data.fw_bans) || [];
                     var mode = state.data && state.data.ban_mode; $('#ad-banmode').textContent = { monitor: 'Observación (nunca bloquea)', balanced: 'Equilibrada', strict: 'Estricta' }[mode] || '—';
                     // La cuenta atras no obliga a repintar: la firma ignora el tiempo restante.
-                    var sig = JSON.stringify(list.map(function (b) { return [b.ip, b.why, b.intel && b.intel.verdict, b.safe_reason]; })) + JSON.stringify(state.open);
+                    var sig = JSON.stringify(list.map(function (b) { return [b.ip, b.why, b.intel && b.intel.verdict, b.intel && b.intel.asn, b.safe_reason, b.net_blocked]; })) + JSON.stringify(state.open);
                     if (sig === state.fwSig) { return; } state.fwSig = sig;
                     tb.innerHTML = '';
                     if (!list.length) { tb.innerHTML = '<tr><td colspan="6" class="muted">El firewall no tiene ninguna IP bloqueada ahora mismo.</td></tr>'; return; }
@@ -949,7 +1069,9 @@
                         var it = b.intel || {}, tr = el('tr'); tr.appendChild(originCell(b));
                         var tdIp = el('td'); tdIp.appendChild(el('code', '', b.ip)); tdIp.appendChild(document.createTextNode(' '));
                         var more = el('span', 'link small', state.open[b.ip] ? 'ocultar' : 'detalles'); more.addEventListener('click', function () { toggle(b.ip); }); tdIp.appendChild(more); tr.appendChild(tdIp);
-                        tr.appendChild(el('td', '', WHY[b.why] || b.why));
+                        var tdWhy = el('td', 'net', WHY[b.why] || b.why);
+                        if (it.asn) { tdWhy.appendChild(el('small', '', it.asn + (it.org ? ' · ' + it.org : ''))); }
+                        tr.appendChild(netActions(b, tdWhy));
                         tr.appendChild(el('td', '', b.left ? Math.floor(b.left / 60) + ' min' : 'sin caducidad'));
                         tr.appendChild(verdictCell(b));
                         var act = el('td'); act.style.whiteSpace = 'nowrap';

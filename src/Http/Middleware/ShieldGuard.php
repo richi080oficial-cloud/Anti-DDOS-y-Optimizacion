@@ -8,6 +8,7 @@ use Illuminate\Http\Request;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldSetting;
 use Pterodactyl\Extensions\AntiDDoS\Services\BlockManager;
 use Pterodactyl\Extensions\AntiDDoS\Services\IpMatcher;
+use Pterodactyl\Extensions\AntiDDoS\Services\NetworkBlocks;
 use Pterodactyl\Extensions\AntiDDoS\Services\RateCounter;
 use Pterodactyl\Extensions\AntiDDoS\Services\SafeIps;
 use Symfony\Component\HttpFoundation\Response;
@@ -21,7 +22,7 @@ use Symfony\Component\HttpFoundation\Response;
  * Orden de decisiones (de mas barato a mas caro, siempre sin SQL):
  *   1. api/remote/* (Wings) y api/antiddos/* (nodos): pasan siempre.
  *   2. IP interna (privada/loopback) o en la lista blanca: pasa siempre.
- *   3. IP bloqueada: 429.
+ *   3. IP bloqueada: 429. IP de un operador (ASN) o pais bloqueado: 403.
  *   4. Assets estaticos: pasan sin contarse.
  *   5. Se cuenta la peticion; si supera el limite, se bloquea (con
  *      duracion creciente por reincidencia) y se responde 429.
@@ -35,6 +36,7 @@ class ShieldGuard
     public function __construct(
         protected BlockManager $blocks,
         protected RateCounter $counter,
+        protected NetworkBlocks $nets,
     ) {
     }
 
@@ -76,6 +78,11 @@ class ShieldGuard
             return $this->deny($request, $remaining);
         }
 
+        // Operador (ASN) o pais bloqueado: 403 directo, sin contar ni tocar la BD.
+        if ($this->nets->match($ip) !== null) {
+            return $this->deny($request, 0, 403);
+        }
+
         if ($request->is(...(array) config('antiddos.exempt_paths', []))) {
             return null;
         }
@@ -101,7 +108,7 @@ class ShieldGuard
         return $this->deny($request, $seconds);
     }
 
-    protected function deny(Request $request, int $retryAfter): Response
+    protected function deny(Request $request, int $retryAfter, int $status = 429): Response
     {
         $headers = ['Cache-Control' => 'no-store'];
 
@@ -109,20 +116,16 @@ class ShieldGuard
             $headers['Retry-After'] = (string) $retryAfter;
         }
 
+        [$code, $detail, $text] = $status === 403
+            ? ['AccessDeniedHttpException', 'Acceso denegado desde tu red.', 'Acceso denegado desde tu red. / Access denied from your network.']
+            : ['TooManyRequestsHttpException', 'Demasiadas peticiones. Tu IP está bloqueada temporalmente.', 'Demasiadas peticiones. Tu IP esta bloqueada temporalmente. / Too many requests.'];
+
         if ($request->expectsJson() || $request->is('api/*')) {
             return new JsonResponse([
-                'errors' => [[
-                    'code' => 'TooManyRequestsHttpException',
-                    'status' => '429',
-                    'detail' => 'Demasiadas peticiones. Tu IP está bloqueada temporalmente.',
-                ]],
-            ], 429, $headers);
+                'errors' => [['code' => $code, 'status' => (string) $status, 'detail' => $detail]],
+            ], $status, $headers);
         }
 
-        return new Response(
-            'Demasiadas peticiones. Tu IP esta bloqueada temporalmente. / Too many requests.',
-            429,
-            $headers + ['Content-Type' => 'text/plain; charset=utf-8']
-        );
+        return new Response($text, $status, $headers + ['Content-Type' => 'text/plain; charset=utf-8']);
     }
 }

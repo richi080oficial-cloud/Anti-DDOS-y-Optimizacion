@@ -7,29 +7,33 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldBlock;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldEvent;
+use Pterodactyl\Extensions\AntiDDoS\Models\ShieldNetBlock;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldSetting;
 use Pterodactyl\Extensions\AntiDDoS\Services\AgentRegistry;
 use Pterodactyl\Extensions\AntiDDoS\Services\BlockManager;
 use Pterodactyl\Extensions\AntiDDoS\Services\IpIntel;
 use Pterodactyl\Extensions\AntiDDoS\Services\IpMatcher;
+use Pterodactyl\Extensions\AntiDDoS\Services\NetworkBlocks;
 use Pterodactyl\Extensions\AntiDDoS\Services\ReputationLists;
 use Pterodactyl\Extensions\AntiDDoS\Services\SafeIps;
 
 class ShieldCommand extends Command
 {
     protected $signature = 'antiddos:manage
-                            {action=info : info | ip | refresh-lists | apikey | purge | prune | feed | ban | unban | bans | whitelist}
-                            {args?* : Argumentos de la accion (IP, add|del|list)}
+                            {action=info : info | ip | refresh-lists | apikey | purge | prune | feed | ban | unban | bans | whitelist | asn | country | refresh-nets}
+                            {args?* : Argumentos de la accion (IP, add|del|list, block|unblock|list AS199585)}
                             {--key= : Clave concreta a usar con la accion apikey}
                             {--if-missing : Con apikey, no hace nada si ya existe una clave}
-                            {--force : No pedir confirmacion (necesario para purge)}
+                            {--force : No pedir confirmacion (purge) o bloquear una red muy grande (asn/country)}
                             {--minutes= : Duracion del bloqueo en minutos (ban); vacio = permanente}
+                            {--hours= : Duracion del bloqueo en horas (asn/country); vacio = permanente}
                             {--reason= : Motivo del bloqueo (ban)}
                             {--payload= : JSON del latido (lo envia el agente de nodo local)}';
 
     protected $description = 'Utilidades internas de Anti-DDoS y Optimización (usadas por el CLI antiddos).';
 
     protected const TABLES = [
+        'antiddos_net_blocks',
         'antiddos_metrics',
         'antiddos_agents',
         'antiddos_events',
@@ -61,6 +65,9 @@ class ShieldCommand extends Command
             'unban' => $this->unban($blocks, $args),
             'bans' => $this->bans($blocks),
             'whitelist' => $this->whitelist($args),
+            'asn', 'operador' => $this->net('asn', $args),
+            'country', 'pais' => $this->net('country', $args),
+            'refresh-nets' => $this->refreshNets(),
             default => $this->unknown($action),
         };
     }
@@ -305,6 +312,92 @@ class ShieldCommand extends Command
 
         ShieldSetting::write(['whitelist' => implode("\n", $list)]);
         $this->info($sub === 'add' ? "{$entry} anadida a la lista blanca." : "{$entry} quitada de la lista blanca.");
+
+        return self::SUCCESS;
+    }
+
+    /**
+     * Bloqueo de operadores (ASN) y paises: block|unblock|list|refresh.
+     *
+     * @param array<int, string> $args
+     */
+    protected function net(string $kind, array $args): int
+    {
+        $nets = app(NetworkBlocks::class);
+        $sub = strtolower((string) ($args[0] ?? 'list'));
+        $value = trim(implode(' ', array_slice($args, 1)));
+        $example = $kind === 'asn' ? 'AS199585' : 'PL';
+
+        if (in_array($sub, ['list', 'ls'], true)) {
+            $rows = $nets->active()->where('kind', $kind)->map(fn (ShieldNetBlock $b) => [
+                $b->label(),
+                (string) $b->prefix_count,
+                number_format($b->ip_count, 0, ',', '.'),
+                $b->expires_at ? $b->expires_at->diffForHumans() : 'permanente',
+                Str::limit((string) $b->reason, 40),
+            ])->values()->all();
+
+            if ($rows === []) {
+                $this->line($kind === 'asn' ? 'No hay operadores bloqueados.' : 'No hay países bloqueados.');
+            } else {
+                $this->table([$kind === 'asn' ? 'Operador' : 'País', 'Rangos', 'IPs', 'Caduca', 'Motivo'], $rows);
+            }
+
+            if (($expr = $nets->cloudflareExpression()) !== null) {
+                $this->line('Regla para Cloudflare (WAF → Reglas personalizadas → Bloquear): <comment>' . $expr . '</comment>');
+            }
+
+            return self::SUCCESS;
+        }
+
+        if ($sub === 'refresh') {
+            return $this->refreshNets();
+        }
+
+        if (!in_array($sub, ['block', 'add', 'ban', 'unblock', 'del', 'remove', 'unban'], true) || $value === '') {
+            $this->error("Uso: antiddos {$kind} block|unblock|list {$example} [--hours=24] [--reason=\"motivo\"]");
+
+            return self::FAILURE;
+        }
+
+        try {
+            if (in_array($sub, ['unblock', 'del', 'remove', 'unban'], true)) {
+                $this->line($nets->unblock($kind, $value) ? "{$value} desbloqueado. Los nodos lo aplican en menos de un minuto." : "{$value} no estaba bloqueado.");
+
+                return self::SUCCESS;
+            }
+
+            $hours = $this->option('hours');
+            $hours = ($hours === null || $hours === '' || (int) $hours === 0) ? null : (int) $hours;
+
+            $this->line('Descargando los rangos de IP…');
+            $block = $nets->block($kind, $value, $hours, (string) ($this->option('reason') ?: 'Bloqueo manual (CLI)'), null, null, (bool) $this->option('force'));
+        } catch (\DomainException|\RuntimeException $e) {
+            $this->error('No se bloquea: ' . $e->getMessage());
+
+            return self::FAILURE;
+        }
+
+        $this->info(sprintf(
+            '%s bloqueado %s: %d rango(s), %s IPs. Los nodos lo aplican en menos de un minuto y el panel ya le responde 403.',
+            $block->label(), $hours === null ? 'permanentemente' : "{$hours} h", $block->prefix_count, number_format($block->ip_count, 0, ',', '.')
+        ));
+        $this->line('Rangos: ' . Str::limit(implode(', ', (array) $block->prefixes), 400));
+
+        return self::SUCCESS;
+    }
+
+    protected function refreshNets(): int
+    {
+        $results = app(NetworkBlocks::class)->refresh();
+
+        if ($results === []) {
+            $this->line('No hay operadores ni países bloqueados.');
+        }
+
+        foreach ($results as $label => $result) {
+            $this->line("  {$label}: {$result}");
+        }
 
         return self::SUCCESS;
     }

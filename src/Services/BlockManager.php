@@ -160,6 +160,8 @@ class BlockManager
             // Tabla de metricas aun sin migrar.
         }
 
+        app(NetworkBlocks::class)->prune();
+
         $this->flush();
 
         return $removed;
@@ -171,8 +173,9 @@ class BlockManager
     }
 
     /**
-     * Texto que descargan los nodos: "B <ip>" por cada bloqueo activo y
-     * "W <ip/cidr>" por cada entrada de la lista blanca.
+     * Texto que descargan los nodos: "B <ip>" por cada bloqueo activo, "A <cidr>"
+     * por cada rango de un operador/pais bloqueado, "W <ip/cidr>" por cada entrada
+     * de la lista blanca y "C CLAVE VALOR" por cada ajuste del firewall.
      */
     public function feed(): string
     {
@@ -180,6 +183,15 @@ class BlockManager
 
         foreach ($this->active() as $block) {
             $lines[] = 'B ' . $block->ip;
+        }
+
+        // Operadores (ASN) y paises bloqueados: "A <cidr>" (set vs_asn de los nodos).
+        try {
+            foreach (app(NetworkBlocks::class)->feedPrefixes() as $cidr) {
+                $lines[] = 'A ' . $cidr;
+            }
+        } catch (\Throwable $e) {
+            // Tabla aun sin migrar: el resto del feed sigue funcionando.
         }
 
         $whitelist = IpMatcher::parseList((string) ShieldSetting::read('whitelist', ''));

@@ -1,6 +1,6 @@
 # Anti-DDoS y Optimización para Pterodactyl — MEMORIA DEL PROYECTO
 
-> **Lee este archivo entero antes de tocar nada.** Resume el proyecto, cómo trabaja el usuario, la arquitectura, las trampas ya conocidas y todo lo hecho en la sesión que lo creó. Versión actual del código: **1.8.0** (`VERSION`). Rama de trabajo: **`main`** (única).
+> **Lee este archivo entero antes de tocar nada.** Resume el proyecto, cómo trabaja el usuario, la arquitectura, las trampas ya conocidas y todo lo hecho en la sesión que lo creó. Versión actual del código: **1.9.0** (`VERSION`). Rama de trabajo: **`main`** (única).
 
 ---
 
@@ -76,11 +76,13 @@ src/                           ← se copia a <panel>/app/Extensions/AntiDDoS  (
   Services/MetricsService.php   historial (BD) 1h/6h/24h/7d con el mismo motor
   Services/IpIntel.php          origen + reputación + veredicto de una IP (caché, en segundo plano)
   Services/ReputationLists.php  listas públicas de atacantes (descarga diaria, búsqueda binaria IPv4)
+  Services/NetworkBlocks.php    bloqueo de OPERADORES (ASN) y PAÍSES: rangos de RIPEstat (respaldo RADB/ipdeny), agregados (máx. /8), feed «A», índice por /8 para ShieldGuard, regla de Cloudflare
+  Models/ShieldNetBlock.php     tabla antiddos_net_blocks (kind asn|country, value, prefixes JSON, expires_at)
   Services/{IpMatcher,RateCounter}.php   utilidades
   Models/Shield{Setting,Block,Event,Agent,Metric}.php
   Console/Commands/ShieldCommand.php      `php artisan antiddos:manage <acción>`
   config/antiddos.php                     valores por defecto de TODOS los ajustes
-  database/migrations/*                   5 migraciones (settings, blocks, events, agents, metrics + detalle + drop optimizaciones)
+  database/migrations/*                   6 migraciones (settings, blocks, events, agents, metrics + detalle + drop optimizaciones, net_blocks)
   resources/views/admin/index.blade.php   LA pantalla (HTML + CSS + JS de la gráfica, todo en un archivo)
   routes/{web,api}.php
 ```
@@ -92,7 +94,8 @@ src/                           ← se copia a <panel>/app/Extensions/AntiDDoS  (
 ### 4.1 Agente de nodo (`scripts/antiddos-fw.sh`)
 - Config: `/etc/antiddos/agent.conf` (se carga con `load_conf`; claves permitidas en `set_conf`). El **panel puede cambiar** `TCP_PORTS, UDP_PORTS, CONN_LIMIT, SYN_RATE, UDP_RATE, BAN_SECONDS, ATTACK_MODE, BAN_MODE` con líneas `C CLAVE VALOR` del feed (`apply_remote_setting`, valida cada valor). `-` = vacío.
 - **iptables**: cadenas propias, sin tocar Docker. `raw/PREROUTING → ANTIDDOS` (lista blanca → bloqueos → malformados → ICMP → contadores → límites SYN/SSH/UDP/web) y `mangle/PREROUTING → ANTIDDOS_M` (connlimit). Una cadena `ANTIDDOS_D_{BAN,MAL,ICMP,UDP,WEB,SLIM}` por **motivo de descarte** (cada una solo hace DROP; así se cuentan). Cadenas vacías `ANTIDDOS_C{TCP,UDP,SYN}` solo cuentan paquetes.
-- **ipset**: `vs_white`, `vs_white_feed`, `vs_feed` (bloqueos del panel), y un set por motivo de bloqueo local: `vs_ban` (flood SYN), `vs_ban_ssh`, `vs_ban_man` (manual).
+- **ipset**: `vs_white`, `vs_white_feed`, `vs_feed` (bloqueos del panel), `vs_asn` (rangos de operadores/países, líneas `A` del feed; cuenta como `d_ban`), y un set por motivo de bloqueo local: `vs_ban` (flood SYN), `vs_ban_ssh`, `vs_ban_man` (manual). `sync_feed` carga todo con **`ipset -exist restore`** en sets `*_tmp` + `swap`; si el cuerpo no tiene ninguna línea `B/W/A/C` (error de PHP) o falla el restore, conserva los sets anteriores. Las líneas `A` con máscara < /8 se rechazan.
+- **Endurecido en 1.9.0**: `hashlimit` con `--hashlimit-htable-max 262144` (`HL_BIG`) / 65536 (`HL_SMALL`); cadena `ANTIDDOS_AMP` (UDP desde puertos de amplificación `AMP_SPORTS` hacia puertos protegidos → `d_udp`); en `ATTACK_MODE` límite de SYN por /24 (`vs_syn24`, 4× el límite, solo frena); mangle `ANTIDDOS_M_INV` (TCP `ctstate INVALID` a puertos protegidos → cuenta como `d_mal`); sysctl `nf_conntrack_tcp_loose=0`, `tcp_timeout_established=21600`, `netdev_max_backlog=65536`, `netdev_budget`, `tcp_max_syn_backlog=65536`.
 - **Política `BAN_MODE`**: `monitor` (nunca banea), `balanced` (**por defecto**: frena el exceso y banea a 3× el límite), `strict` (banea al primer exceso).
 - **Servicios systemd**: `antiddos-fw` (reglas al arrancar), `antiddos-sync.timer` (cada 30 s: `cmd_sync` → feed + latido), `antiddos-live` (`cmd_watch`: contadores **cada 1 s**; escribe `/var/lib/antiddos/live.json` o hace POST `/api/antiddos/live` si el panel es remoto).
 - **Datos que lee**: `read_counters` (13 números: tcp udp syn tcp_b udp_b + 6 motivos + connlimit + web + bytes frenados), `read_net` (RX/TX de la tarjeta `/proc/net/dev`, como OVH), `top_ips_json` (conntrack), `fw_bans_json`.
@@ -100,7 +103,8 @@ src/                           ← se copia a <panel>/app/Extensions/AntiDDoS  (
 
 ### 4.2 Panel
 - **Escudo web** (`ShieldGuard`, middleware GLOBAL añadido tras TrustProxies): cuenta peticiones/IP en Redis; exentos `api/remote/*`, `api/antiddos/*`, assets, IPs internas, **Cloudflare** (si el panel ve IP de Cloudflare = falta TRUSTED_PROXIES → falla «abierto»), infraestructura y lista blanca. Falla abierto ante cualquier excepción.
-- **Feed** (`BlockManager::feed`): texto plano `B ip` (bloqueo), `W ip/cidr` (lista blanca + nodos/agentes/panel automáticamente), `C CLAVE VALOR` (ajustes). Los puertos enviados = manuales ∪ detectados (`MinecraftPorts::plan`) **solo si el firewall está «gestionado»** (`fw_tcp_ports` ≠ ''). Nunca se envía `TCP_PORTS=-`.
+- **Operadores/países** (`NetworkBlocks`): no deja bloquear redes que contengan la IP del admin (salvo en lista blanca), IPs de infraestructura (= el operador de tu propio servidor) o rangos de Cloudflare; ASN 13335/209242 prohibidos; > 4 M de IPs pide `force`. `ShieldGuard` responde 403 con `match()` (1 GET de caché por petición + 1 por /8 con bloqueos). Refresco diario 05:40 (`refresh-nets`).
+- **Feed** (`BlockManager::feed`): texto plano `B ip` (bloqueo), `A cidr` (rango de operador/país), `W ip/cidr` (lista blanca + nodos/agentes/panel automáticamente), `C CLAVE VALOR` (ajustes). Los puertos enviados = manuales ∪ detectados (`MinecraftPorts::plan`) **solo si el firewall está «gestionado»** (`fw_tcp_ports` ≠ ''). Nunca se envía `TCP_PORTS=-`.
 - **Tráfico**: `trafficData` (JSON) → `LiveTraffic` o `MetricsService` → `TrafficEngine`. Vistas `network` (Mbit/s RX/TX/frenado), `packets` (pps), `reasons` (apilado por motivo). Reglas de veracidad: velocidad real por tramo ponderada por tiempo, **huecos = null** (nunca picos falsos), reinicios de contador detectados, suma de nodos. El JS pide cada ~1 s en vivo (15 s si no se mira la pestaña) y marca «sin datos recientes» honestamente.
 - **Estado** (`HealthCheck`): tablas, escudo, clave, caché Redis, IP real (Cloudflare/privada), listas de reputación, y el agente de cada nodo (por IP del FQDN o por host; con 1 nodo y 1 agente se emparejan solos).
 - **Puertos**: `PortAdvisor` valora; `PortChanger` mueve la allocation (misma IP/nodo, libera la antigua, `sync()` a Wings, reinicio opcional). Rango recomendado 20000–32000 (configurable en la UI), evita 8000–8999 y puertos por defecto.
@@ -108,7 +112,7 @@ src/                           ← se copia a <panel>/app/Extensions/AntiDDoS  (
 - **Falsos positivos**: `SafeIps::protectedReason` impide bloquear (manual, CLI, escudo web) nodos, agentes, panel, Cloudflare, lista blanca, privadas y la IP del admin. Botón «Es legítima» = lista blanca + desbloqueo.
 
 ### 4.3 Base de datos (prefijo `antiddos_`)
-`settings` (clave/valor; cache), `blocks` (IPs bloqueadas por el panel), `events`, `agents` (último latido + payload JSON), `metrics` (muestras ~25 s: contadores acumulados incl. RX/TX y motivos). Tabla `optimizations` ya no existe (migración la borra).
+`settings` (clave/valor; cache), `blocks` (IPs bloqueadas por el panel), `net_blocks` (operadores/países bloqueados, desde 1.9.0), `events`, `agents` (último latido + payload JSON), `metrics` (muestras ~25 s: contadores acumulados incl. RX/TX y motivos). Tabla `optimizations` ya no existe (migración la borra).
 
 ---
 
@@ -120,10 +124,11 @@ install | reinstall | update [--force] | uninstall [--drop-data] | status | vers
 node-install [--tcp= --udp= --web= --ssh= --panel-url= --key= --panel-dir=] | node-uninstall | node-status
 fw status|apply|remove|top|sync|set CLAVE VALOR|white-add|white-del|ban|unban|bans     attack-on | attack-off
 ban IP [min] | unban IP | bans | whitelist add|del|list
-ip 203.0.113.7                análisis completo (origen, reputación, ¿se puede bloquear?)
+ip 203.0.113.7                análisis completo (origen, reputación, ¿se puede bloquear?)  (enlazado en el gestor desde 1.9.0)
+asn block|unblock|list|refresh AS199585 [--hours= --reason= --force]   country block|unblock|list PL
 nginx-on|nginx-off|nginx-status   autoupdate-on|autoupdate-off
 ```
-Artisan: `php artisan antiddos:manage info|apikey|purge|prune|feed|heartbeat|ip|refresh-lists|ban|unban|bans|whitelist`.
+Artisan: `php artisan antiddos:manage info|apikey|purge|prune|feed|heartbeat|ip|refresh-lists|ban|unban|bans|whitelist|asn|country|refresh-nets`.
 
 ---
 
@@ -152,6 +157,8 @@ sudo antiddos status ; systemctl is-active antiddos-live
 ---
 
 ## 8. Cómo verificar sin PHP ni Linux (hazlo SIEMPRE antes de commitear)
+
+> **PC «ricard» (sesión de 1.9.0)**: `git` NO está en el PATH; usa `C:\Users\ricard\AppData\Local\GitHubDesktop\app-*\resources\app\git\cmd\git.exe`. En la misma carpeta, `usr\bin\sh.exe` es **bash 5.2** (sirve para `bash -n` y simular funciones del agente con `ipset` falso) y hay `awk.exe`. Sin Python. PHP real: descargar el zip portable de windows.php.net al scratchpad y ejecutarlo con `Start-Process` (con `&` desde PowerShell falla raro). `shellcheck` con `npm i shellcheck` (descarga el binario).
 
 1. **Bash**: `bash -n install.sh antiddos.sh bin/antiddos scripts/*.sh`.
 2. **PHP**: no hay `php`. Se usa el parser de Node: crear una carpeta temporal, `npm i php-parser` y un `check.js` que recorra los `.php` (excepto `*.blade.php`) con `new Engine({parser:{php8:true}}).parseCode(...)`. Esperado: «N files checked, 0 errors».
@@ -191,6 +198,7 @@ sudo antiddos status ; systemctl is-active antiddos-live
 | 1.5.0–1.6.0 | **Modo en vivo**: servicio `antiddos-live`, 3 s → **1 s**. |
 | 1.7.0 | Gráfica «como OVH»: **↓RX/↑TX de la interfaz**, paquetes/s, **motivos de frenado** apilados, unidades, suavizado, escala log, pausa, CSV, estadísticas, **top de IPs**. Motor único `TrafficEngine`. |
 | 1.8.0 | **Origen y reputación de IPs** (país/ASN/listas públicas/AbuseIPDB) con veredicto; **política de bloqueo** (monitor/balanced/strict) para evitar falsos positivos; bloqueos del firewall con motivo y botón «Es legítima»; `SafeIps`. |
+| 1.9.0 | Petición urgente: DDoS desde **AS199585** (TELNET Ropczyce, Polonia, ~2.300 IPs, «Operador / residencial») que cambia de IP. **Bloqueo de operadores (ASN) y países** desde el panel (pestaña Bloqueos + «Bloquear operador» en Tráfico), CLI `asn`/`country`, feed `A`, set `vs_asn`, 403 en el panel, regla para Cloudflare WAF. **Firewall endurecido** para floods grandes (el usuario habló de «solicitudes de hasta 107 M»): tablas hashlimit grandes, amplificación UDP, TCP INVALID/ACK floods, /24 en modo ataque, sysctl, sync con `ipset restore`. Arreglado: `antiddos ip` no estaba enlazado en el gestor; `extension.json` estaba en 1.1.0. |
 
 Decisiones del usuario a recordar: quitar la optimización; una sola rama; el nombre se queda; quería ver **por qué** se bloquea cada cosa y evitar bloqueos sin sentido; quiere datos **precisos y veraces** en la gráfica.
 

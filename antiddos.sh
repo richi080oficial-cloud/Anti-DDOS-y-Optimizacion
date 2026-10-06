@@ -433,6 +433,26 @@ do_whitelist() {
     esac
 }
 
+# ── Operadores (ASN) y países: se gestionan en el panel y llegan a todos los nodos ──
+do_net() {
+    local kind="$1"; shift
+    { [[ -n "$(detect_panel)" ]] && is_installed; } || fail "Los operadores y países se bloquean desde el panel: ejecuta este comando en la máquina del panel (o usa la pestaña Bloqueos)."
+    require_panel
+    local extra=() a
+    for a in "${PASSTHRU[@]}"; do
+        [[ "$a" == --hours=* || "$a" == --reason=* ]] && extra+=("$a")
+    done
+    [[ "$FORCE" == "1" ]] && extra+=(--force)
+    run_installer artisan "$kind" "$@" "${extra[@]}" || exit 1
+}
+
+# Origen, reputación y si se puede bloquear una IP.
+do_ip() {
+    [[ -n "${1:-}" ]] || fail "Uso: antiddos ip <IP>"
+    require_panel
+    run_installer artisan ip "$1" || exit 1
+}
+
 do_nginx() {
     [[ -f "$SRC_DIR/scripts/nginx-shield.sh" ]] || sync_sources
     bash "$SRC_DIR/scripts/nginx-shield.sh" "$1" "${PASSTHRU[@]}"
@@ -529,6 +549,13 @@ BLOQUEOS (firewall local y/o panel, según lo que haya en esta máquina)
   unban <IP>            Desbloquea
   bans                  Lista los bloqueos activos
   whitelist add|del|list [IP|CIDR]
+  ip <IP>               Origen, operador, reputación y si se puede bloquear
+
+OPERADORES Y PAÍSES (bloquea todas sus IPs, también las nuevas; en el panel y en todos los nodos)
+  asn block AS199585 [--hours=24] [--reason="motivo"]   Bloquea un operador entero (vacío = permanente)
+  asn unblock AS199585 | asn list | asn refresh
+  country block PL [--hours=24]                          Bloquea un país entero (redes > 4 M de IPs: --force)
+  country unblock PL | country list
 
 OTROS
   autoupdate-on         Programa la actualización automática diaria (04:00)
@@ -598,6 +625,9 @@ case "$ACTION" in
     unban)                  do_unban "${POS[0]:-}" ;;
     bans)                   do_bans ;;
     whitelist|white)        do_whitelist "${POS[0]:-list}" "${POS[1]:-}" ;;
+    asn|operador)           do_net asn "${POS[@]}" ;;
+    country|pais|país)      do_net country "${POS[@]}" ;;
+    ip)                     do_ip "${POS[0]:-}" ;;
     nginx-on)               do_nginx on ;;
     nginx-off)              do_nginx off ;;
     nginx-status)           do_nginx status ;;

@@ -9,6 +9,7 @@ use Pterodactyl\Extensions\AntiDDoS\Console\Commands\ShieldCommand;
 use Pterodactyl\Extensions\AntiDDoS\Http\Middleware\AdminSidebarLink;
 use Pterodactyl\Extensions\AntiDDoS\Http\Middleware\ShieldGuard;
 use Pterodactyl\Extensions\AntiDDoS\Services\BlockManager;
+use Pterodactyl\Extensions\AntiDDoS\Services\NetworkBlocks;
 use Pterodactyl\Extensions\AntiDDoS\Services\RateCounter;
 
 /**
@@ -23,6 +24,7 @@ class AntiDDoSServiceProvider extends ServiceProvider
 
         $this->app->singleton(BlockManager::class);
         $this->app->singleton(RateCounter::class);
+        $this->app->singleton(NetworkBlocks::class);
 
         // Las rutas se cargan aqui, en register(), y no en boot(): el panel de
         // cliente de Pterodactyl es una SPA servida por una ruta "catch-all" que
@@ -60,6 +62,8 @@ class AntiDDoSServiceProvider extends ServiceProvider
         $this->callAfterResolving(Schedule::class, function (Schedule $schedule) {
             $schedule->command('antiddos:manage prune')->dailyAt('04:30')->withoutOverlapping();
             $schedule->command('antiddos:manage refresh-lists')->dailyAt('05:15')->withoutOverlapping();
+            // Rangos nuevos que anuncien los operadores/paises bloqueados.
+            $schedule->command('antiddos:manage refresh-nets')->dailyAt('05:40')->withoutOverlapping();
         });
     }
 }

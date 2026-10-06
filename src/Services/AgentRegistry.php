@@ -47,6 +47,7 @@ class AgentRegistry
             'ban_seconds' => $int($data['ban_seconds'] ?? 0),
             'bans_local' => $int($data['bans_local'] ?? 0),
             'bans_panel' => $int($data['bans_panel'] ?? 0),
+            'bans_net' => $int($data['bans_net'] ?? 0),
             'dropped' => $int($data['dropped'] ?? 0),
             'tcp_pkts' => $int($data['tcp_pkts'] ?? 0),
             'udp_pkts' => $int($data['udp_pkts'] ?? 0),

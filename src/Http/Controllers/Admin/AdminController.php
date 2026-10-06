@@ -21,6 +21,7 @@ use Pterodactyl\Extensions\AntiDDoS\Services\IpMatcher;
 use Pterodactyl\Extensions\AntiDDoS\Services\LiveTraffic;
 use Pterodactyl\Extensions\AntiDDoS\Services\MetricsService;
 use Pterodactyl\Extensions\AntiDDoS\Services\MinecraftPorts;
+use Pterodactyl\Extensions\AntiDDoS\Services\NetworkBlocks;
 use Pterodactyl\Extensions\AntiDDoS\Services\PortAdvisor;
 use Pterodactyl\Extensions\AntiDDoS\Services\PortChanger;
 use Pterodactyl\Extensions\AntiDDoS\Services\ReputationLists;
@@ -41,6 +42,7 @@ class AdminController extends Controller
         protected IpIntel $intel,
         protected SafeIps $safe,
         protected ReputationLists $reputation,
+        protected NetworkBlocks $nets,
     ) {
     }
 
@@ -69,6 +71,8 @@ class AdminController extends Controller
             'banModeManaged' => (string) ($settings['fw_ban_mode'] ?? '') !== '',
             'settings' => $settings,
             'blocks' => $this->blocks->active(),
+            'netBlocks' => $this->nets->active(),
+            'cfExpression' => $this->nets->cloudflareExpression(),
             'events' => ShieldEvent::query()->orderByDesc('id')->limit(150)->get(),
             'hasApiKey' => (string) (ShieldSetting::read('api_key_hash') ?? '') !== '',
             'panelUrl' => rtrim((string) config('app.url'), '/'),
@@ -296,6 +300,7 @@ class AdminController extends Controller
                 'ip' => $ip,
                 'conns' => $conns,
                 'blocked' => array_key_exists($ip, $blocked),
+                'net_blocked' => $this->nets->match($ip),
                 'safe_reason' => $this->safe->protectedReason($ip, $requestIp),
                 'intel' => $this->intel->peek($ip),
             ];
@@ -328,6 +333,7 @@ class AdminController extends Controller
 
         foreach (array_slice($rows, 0, 30) as $b) {
             $out[] = $b + [
+                'net_blocked' => $this->nets->match($b['ip']),
                 'safe_reason' => $this->safe->protectedReason($b['ip'], $requestIp),
                 'intel' => $this->intel->peek($b['ip']),
             ];
@@ -517,6 +523,68 @@ class AdminController extends Controller
 
         return $this->tab('blocks')
             ->with('antiddos:success', "IP {$data['ip']} bloqueada. Los nodos la recibirán en menos de un minuto.");
+    }
+
+    /** Bloquea un operador entero (ASN) o un pais: tambien sus IPs futuras. */
+    public function blockNetwork(Request $request): RedirectResponse
+    {
+        $data = $request->validate([
+            'kind' => 'required|in:asn,country',
+            'value' => 'required|string|max:120',
+            'hours' => 'nullable|integer|min:1|max:8760',
+            'reason' => 'nullable|string|max:190',
+        ]);
+
+        @set_time_limit(120);
+
+        try {
+            $block = $this->nets->block(
+                $data['kind'],
+                $data['value'],
+                isset($data['hours']) ? (int) $data['hours'] : null,
+                $data['reason'] ?? null,
+                $request->user()?->id,
+                $request->ip(),
+                $request->boolean('force')
+            );
+        } catch (\DomainException|\RuntimeException $e) {
+            return $this->tab('blocks')->with('antiddos:error', 'No se bloquea: ' . $e->getMessage());
+        }
+
+        return $this->tab('blocks')->with('antiddos:success', sprintf(
+            '%s bloqueado: %d rango(s), %s IPs. El panel ya le responde 403 y los nodos lo aplican en menos de un minuto.',
+            $block->label(), $block->prefix_count, number_format($block->ip_count, 0, ',', '.')
+        ));
+    }
+
+    public function unblockNetwork(Request $request): RedirectResponse
+    {
+        $data = $request->validate(['kind' => 'required|in:asn,country', 'value' => 'required|string|max:120']);
+
+        try {
+            $done = $this->nets->unblock($data['kind'], $data['value']);
+        } catch (\DomainException $e) {
+            return $this->tab('blocks')->with('antiddos:error', $e->getMessage());
+        }
+
+        return $this->tab('blocks')->with($done ? 'antiddos:success' : 'antiddos:error', $done
+            ? 'Desbloqueado. Los nodos lo aplican en menos de un minuto.'
+            : 'No estaba bloqueado.');
+    }
+
+    /** Vuelve a descargar los rangos de los operadores/paises bloqueados. */
+    public function refreshNetworks(): RedirectResponse
+    {
+        @set_time_limit(180);
+
+        $results = $this->nets->refresh();
+        $lines = [];
+
+        foreach ($results as $label => $result) {
+            $lines[] = "{$label}: {$result}";
+        }
+
+        return $this->tab('blocks')->with('antiddos:success', $lines === [] ? 'No hay redes bloqueadas.' : 'Rangos actualizados — ' . implode(' · ', $lines));
     }
 
     /** Añade una IP a la lista blanca (y la desbloquea): para corregir un falso positivo. */

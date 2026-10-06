@@ -19,6 +19,7 @@ Anti-DDoS para servidores de Minecraft en Pterodactyl, en dos capas:
 - **Detección automática de puertos**: el panel reconoce los eggs de Minecraft (Paper, Spigot, Forge, Bedrock, BungeeCord…), toma el puerto de cada servidor y lo protege solo; se actualiza en menos de un minuto al crear o mover servidores. Opcionalmente protege también sus puertos adicionales (Dynmap, voice chat, query…) y puedes elegir qué eggs cuentan como Minecraft. Los puertos manuales se suman a los detectados.
 - **Firewall editable desde el admin**: puertos TCP/UDP (`25565:25666`), límites por IP y **modo «bajo ataque»** se cambian en la pestaña *Protección* y se envían a todos los nodos sin tocar la consola. Una vez guardados, el panel manda: un `antiddos fw set` manual en el nodo se sobrescribe en la siguiente sincronización.
 - Los bloqueos del panel (manuales o automáticos) **se propagan a todos los nodos** en menos de un minuto.
+- **Bloqueo de operadores (ASN) y países enteros** (pestaña *Bloqueos*, o el enlace «Bloquear operador» junto a cada IP en *Tráfico*): si el ataque viene de un operador concreto (p. ej. `AS199585 · Operador / residencial`), se bloquean **todos sus rangos de IP**, así que cambiar de IP no le sirve al atacante. Los rangos salen de RIPEstat (lo que el operador anuncia en internet; respaldo: RADB) y para países de RIPEstat/ipdeny; se actualizan solos cada día. Se aplica en el firewall de todos los nodos (todo el tráfico de esa red) y en el panel (403). Duración permanente o temporal. No deja bloquear una red que contenga tu IP, la de tus nodos/panel (el operador de tu propio servidor) o Cloudflare, y pide confirmación para redes de más de 4 millones de IPs. Te da la regla lista para pegar en **Cloudflare WAF**. Por consola: `sudo antiddos asn block AS199585`.
 
 ## Qué puede y qué no puede parar (importante)
 
@@ -28,7 +29,8 @@ Anti-DDoS y Optimización frena todo lo que se puede frenar **en tu propia máqu
 
 Otras limitaciones conocidas:
 
-- Solo IPv4 (el firewall no toca ip6tables).
+- Solo IPv4 (el firewall no toca ip6tables). El bloqueo de operadores/países también es solo IPv4.
+- Bloquear un operador o un país corta también a los jugadores legítimos que lo usen: úsalo con operadores de los que solo llegan ataques.
 - Los floods de **UDP** (Bedrock/Geyser) solo se descartan, no se bloquea la IP de origen, porque suele estar falsificada.
 - Los bloqueos por SYN flood asumen que una IP real que hace cientos de SYN/s es hostil; son temporales (15 min por defecto).
 
@@ -115,6 +117,12 @@ Si ya estaba instalado, el instalador del panel ofrece **Reinstalar** (no toca l
 | `sudo antiddos unban 1.2.3.4` | Desbloquea |
 | `sudo antiddos bans` | Lista los bloqueos activos |
 | `sudo antiddos whitelist add\|del\|list [IP\|CIDR]` | Lista blanca |
+| `sudo antiddos ip 203.0.113.7` | Origen, operador (ASN), reputación y si se puede bloquear |
+| **Operadores y países** (en la máquina del panel; llegan a todos los nodos) | |
+| `sudo antiddos asn block AS199585 [--hours=24] [--reason="DDoS"]` | Bloquea un operador entero, también sus IPs nuevas (vacío = permanente) |
+| `sudo antiddos asn unblock AS199585` · `asn list` · `asn refresh` | Desbloquea · lista (con la regla para Cloudflare) · vuelve a descargar los rangos |
+| `sudo antiddos country block PL [--hours=24]` | Bloquea un país entero (redes de más de 4 M de IPs: añade `--force`) |
+| `sudo antiddos country unblock PL` · `country list` | Desbloquea · lista |
 | **Nginx (panel)** | |
 | `sudo antiddos nginx-on [--rate=20 --burst=100 --conn=50]` | Límites de peticiones en nginx (capa 7) |
 | `sudo antiddos nginx-off` / `nginx-status` | Quita / muestra |
@@ -126,9 +134,11 @@ Variables de entorno: `PANEL_DIR`, `WEB_USER`, `REPO_URL`, `REPO_BRANCH`, `SRC_D
 
 Todo vive en dos cadenas propias (`ANTIDDOS` en la tabla `raw`, `ANTIDDOS_M` en `mangle`) y en sets de `ipset`, así que **no toca tus reglas ni las de Docker**:
 
-1. **`raw/PREROUTING`** (antes de conntrack, por lo que un ataque no llena la tabla de conexiones): lista blanca → bloqueos (locales y del panel) → fragmentos y combinaciones ilegales de flags TCP → límite de ping → **límite de SYN por IP** (si se supera, la IP se bloquea `BAN_SECONDS` con `-j SET --add-set … --timeout`, sin procesos externos) → límite SSH → límite UDP.
-2. **`mangle/PREROUTING`**: **límite de conexiones simultáneas por IP** (`connlimit`).
-3. **`sysctl`**: SYN cookies, backlog, tiempos de conntrack, `rp_filter`, etc.
+1. **`raw/PREROUTING`** (antes de conntrack, por lo que un ataque no llena la tabla de conexiones): lista blanca → bloqueos (IPs locales y del panel, **operadores y países bloqueados**) → fragmentos y combinaciones ilegales de flags TCP → límite de ping → **amplificación UDP** (paquetes que llegan a tus puertos desde puertos de DNS, NTP, memcached, SSDP, CLDAP… son respuestas falsas de un ataque) → **límite de SYN por IP** (si se supera, la IP se bloquea `BAN_SECONDS` con `-j SET --add-set … --timeout`, sin procesos externos) → en modo «bajo ataque», **límite por red /24** (frena botnets que reparten el ataque entre muchas IPs del mismo operador) → límite SSH → límite UDP.
+2. **`mangle/PREROUTING`**: **TCP fuera de conexión** (floods de ACK/RST: con `nf_conntrack_tcp_loose=0` quedan como INVALID y se descartan sin ocupar la tabla de conexiones) y **límite de conexiones simultáneas por IP** (`connlimit`).
+3. **`sysctl`**: SYN cookies, backlog de SYN (65536), colas de la tarjeta (`netdev_max_backlog` 65536, `netdev_budget`), tiempos de conntrack (conexiones muertas fuera en 6 h, no en 5 días), `rp_filter`, etc.
+
+Las tablas de los límites por IP (`hashlimit`) admiten hasta 262.144 IPs distintas: con la tabla por defecto del kernel (unas miles) un flood con muchas IPs la llena y el kernel empieza a descartar también a los jugadores nuevos. Los bloqueos del panel se cargan de golpe con `ipset restore` (miles de rangos en un solo paso) y, si el panel responde con un error, se conservan los anteriores.
 
 Funciona con los puertos que publica Docker/Wings porque `raw` y `mangle` se evalúan antes del DNAT: el puerto que ve es el publicado.
 
@@ -155,6 +165,8 @@ Los bloqueos automáticos se registran en el journal: `journalctl -k | grep ANTI
 - Se registra como middleware global, **después** de `TrustProxies` (ve la IP real detrás de nginx/Cloudflare si `TRUSTED_PROXIES` está bien configurado) y antes de sesión y base de datos: un bloqueado recibe un `429` casi gratis.
 - No cuenta la API de Wings (`api/remote/*`), el feed de los nodos ni los assets estáticos. Las IPs privadas/loopback y las de la lista blanca nunca se bloquean.
 - Por defecto: 480 peticiones/minuto y 15 intentos de login/minuto por IP; primer bloqueo de 30 min que se **duplica en cada reincidencia** hasta 24 h.
+- Las IPs de un operador o país bloqueado reciben un `403` directo (sin contar ni tocar la base de datos).
+- **Con el panel detrás de Cloudflare**, un flood HTTP de millones de peticiones se para mejor **en Cloudflare**, antes de llegar a tu servidor: la pestaña *Bloqueos* te da la expresión exacta (`(ip.src.asnum in {199585})`) para una regla *WAF → Custom rules → Block*.
 - Si el panel ve siempre la IP de un proxy interno (porque `TRUSTED_PROXIES` no está configurado) todas las peticiones parecen internas y el escudo no actúa: falla «abierto» a propósito, para no bloquear a todos tus usuarios.
 - Un fallo del escudo (caché caída, migraciones pendientes…) nunca tumba el panel: la petición pasa.
 

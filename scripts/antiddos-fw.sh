@@ -20,11 +20,13 @@
 #   antiddos-fw set CLAVE VALOR  Cambia un valor de /etc/antiddos/agent.conf
 #
 # Como funciona (de menos a mas coste de CPU):
-#   1. raw/PREROUTING  -> lista blanca, bloqueos, paquetes malformados, limite
-#                         de SYN por IP, limite de UDP por IP. Se ejecuta ANTES de
-#                         conntrack, asi un ataque no llena la tabla de conexiones.
-#   2. mangle/PREROUTING -> limite de conexiones simultaneas por IP (connlimit).
-#   3. sysctl          -> SYN cookies, backlog y tiempos de conntrack.
+#   1. raw/PREROUTING  -> lista blanca, bloqueos (IPs, operadores y paises del panel),
+#                         paquetes malformados, amplificacion UDP, limite de SYN por IP
+#                         (y por /24 en modo ataque), limite de UDP por IP. Se ejecuta
+#                         ANTES de conntrack, asi un ataque no llena la tabla de conexiones.
+#   2. mangle/PREROUTING -> TCP fuera de conexion (floods de ACK) y limite de conexiones
+#                         simultaneas por IP (connlimit).
+#   3. sysctl          -> SYN cookies, colas, backlog y tiempos de conntrack.
 #
 # Funciona con los puertos publicados por Docker (Wings) porque raw/mangle se
 # evaluan antes del DNAT de Docker: el puerto que se ve es el publicado.
@@ -125,7 +127,25 @@ create_sets() {
     # Un set por motivo, para poder decir exactamente por que esta bloqueada cada IP.
     ipset create -exist vs_ban_ssh    hash:ip timeout 0 maxelem 65536
     ipset create -exist vs_ban_man    hash:ip timeout 0 maxelem 65536
+    # Rangos de operadores (ASN) y paises bloqueados desde el panel (lineas "A" del feed).
+    ipset create -exist vs_asn        hash:net maxelem "$NET_MAXELEM"
 }
+
+# Tamano de los sets que se rellenan desde el panel.
+FEED_MAXELEM=262144     # IPs bloqueadas y lista blanca
+NET_MAXELEM=1048576     # rangos de operadores/paises (un pais grande son decenas de miles)
+
+# Tablas de los limites por IP (hashlimit). Por defecto el kernel solo guarda unas
+# miles de IPs: en un flood con muchas IPs distintas la tabla se llena y el kernel
+# descarta tambien a los jugadores nuevos. Con estas tablas aguanta muchas mas.
+HL_BIG=(--hashlimit-htable-size 32768 --hashlimit-htable-max 262144)
+HL_SMALL=(--hashlimit-htable-size 4096 --hashlimit-htable-max 65536)
+
+# Puertos de ORIGEN de los ataques de amplificacion/reflexion por UDP (DNS, NTP,
+# memcached, SSDP, CLDAP, chargen, SNMP, NetBIOS, RIP, ARMS, WS-Discovery, mDNS...).
+# Un jugador nunca envia desde estos puertos: lo que llega de ellos a tus puertos
+# de Minecraft son respuestas falsas de un ataque. (max. 15 entradas)
+AMP_SPORTS="17,19,53,111,123,137,161,389,520,1900,3283,3702,5353,11211"
 
 load_whitelist() {
     ipset flush vs_white
@@ -151,8 +171,8 @@ remove_rules() {
     while ipt -t raw    -D PREROUTING -j ANTIDDOS   2>/dev/null; do :; done
     while ipt -t mangle -D PREROUTING -j ANTIDDOS_M 2>/dev/null; do :; done
     local spec
-    for spec in "raw ANTIDDOS" "raw VS_SYNFLOOD" "raw VS_SSHBAN" "raw ANTIDDOS_D_SLIM" "raw ANTIDDOS_CTCP" "raw ANTIDDOS_CUDP" "raw ANTIDDOS_CSYN" \
-                 "raw ANTIDDOS_D_BAN" "raw ANTIDDOS_D_MAL" "raw ANTIDDOS_D_ICMP" "raw ANTIDDOS_D_UDP" "raw ANTIDDOS_D_WEB" "mangle ANTIDDOS_M"; do
+    for spec in "raw ANTIDDOS" "raw VS_SYNFLOOD" "raw VS_SSHBAN" "raw ANTIDDOS_AMP" "raw ANTIDDOS_D_SLIM" "raw ANTIDDOS_CTCP" "raw ANTIDDOS_CUDP" "raw ANTIDDOS_CSYN" \
+                 "raw ANTIDDOS_D_BAN" "raw ANTIDDOS_D_MAL" "raw ANTIDDOS_D_ICMP" "raw ANTIDDOS_D_UDP" "raw ANTIDDOS_D_WEB" "mangle ANTIDDOS_M" "mangle ANTIDDOS_M_INV"; do
         # shellcheck disable=SC2086
         set -- $spec
         ipt -t "$1" -F "$2" 2>/dev/null
@@ -171,7 +191,10 @@ apply_rules() {
     ipt -t raw -N ANTIDDOS_CUDP
     ipt -t raw -N ANTIDDOS_CSYN
     ipt -t raw -N ANTIDDOS
+    ipt -t raw -N ANTIDDOS_AMP
     ipt -t mangle -N ANTIDDOS_M
+    ipt -t mangle -N ANTIDDOS_M_INV
+    ipt -t mangle -A ANTIDDOS_M_INV -j DROP
 
     # Una cadena por MOTIVO de descarte (cada una solo hace DROP): asi el panel
     # puede decir exactamente por que se frena el trafico (grafica «Motivos»).
@@ -195,6 +218,7 @@ apply_rules() {
     "${R[@]}" -m set --match-set vs_white src      -j RETURN
     "${R[@]}" -m set --match-set vs_white_feed src -j RETURN
     "${R[@]}" -m set --match-set vs_feed src       -j ANTIDDOS_D_BAN
+    "${R[@]}" -m set --match-set vs_asn src        -j ANTIDDOS_D_BAN
     "${R[@]}" -m set --match-set vs_ban src        -j ANTIDDOS_D_BAN
     "${R[@]}" -m set --match-set vs_ban_ssh src    -j ANTIDDOS_D_BAN
     "${R[@]}" -m set --match-set vs_ban_man src    -j ANTIDDOS_D_BAN
@@ -212,7 +236,7 @@ apply_rules() {
 
     # Ping flood.
     "${R[@]}" -p icmp --icmp-type echo-request \
-        -m hashlimit --hashlimit-name vs_icmp --hashlimit-mode srcip \
+        -m hashlimit --hashlimit-name vs_icmp --hashlimit-mode srcip "${HL_SMALL[@]}" \
         --hashlimit-above "${ICMP_RATE}/second" --hashlimit-burst 20 -j ANTIDDOS_D_ICMP
 
     # Contadores del trafico externo hacia los puertos protegidos (lo de la lista
@@ -223,6 +247,16 @@ apply_rules() {
     fi
     if [[ -n "$UDP_PORTS" ]]; then
         "${R[@]}" -p udp -m multiport --dports "$UDP_PORTS" -j ANTIDDOS_CUDP
+    fi
+
+    # Amplificacion/reflexion UDP hacia los puertos protegidos (incluido el «query»
+    # UDP de los servidores Java, que usa el mismo puerto que el juego).
+    ipt -t raw -A ANTIDDOS_AMP -p udp -m multiport --sports "$AMP_SPORTS" -j ANTIDDOS_D_UDP
+    if [[ -n "$UDP_PORTS" ]]; then
+        "${R[@]}" -p udp -m multiport --dports "$UDP_PORTS" -j ANTIDDOS_AMP
+    fi
+    if [[ -n "$TCP_PORTS" ]]; then
+        "${R[@]}" -p udp -m multiport --dports "$TCP_PORTS" -j ANTIDDOS_AMP
     fi
 
     # Politica de bloqueo (BAN_MODE):
@@ -238,14 +272,23 @@ apply_rules() {
     if [[ -n "$TCP_PORTS" ]]; then
         if [[ "$BAN_MODE" != "monitor" ]]; then
             "${R[@]}" -p tcp --syn -m multiport --dports "$TCP_PORTS" \
-                -m hashlimit --hashlimit-name vs_synban --hashlimit-mode srcip \
+                -m hashlimit --hashlimit-name vs_synban --hashlimit-mode srcip "${HL_BIG[@]}" \
                 --hashlimit-above "${ban_rate}/second" --hashlimit-burst "$ban_burst" \
                 -j VS_SYNFLOOD
         fi
         if [[ "$BAN_MODE" != "strict" ]]; then
             "${R[@]}" -p tcp --syn -m multiport --dports "$TCP_PORTS" \
-                -m hashlimit --hashlimit-name vs_syn --hashlimit-mode srcip \
+                -m hashlimit --hashlimit-name vs_syn --hashlimit-mode srcip "${HL_BIG[@]}" \
                 --hashlimit-above "${SYN_RATE}/second" --hashlimit-burst "$SYN_BURST" \
+                -j ANTIDDOS_D_SLIM
+        fi
+        # Modo «bajo ataque»: limite tambien por red /24. Frena las botnets que reparten
+        # el ataque entre muchas IPs del mismo operador (cada una por debajo del limite
+        # por IP). Solo frena, no bloquea: margen de 4 veces el limite por IP.
+        if [[ "${ATTACK_MODE}" == "1" ]]; then
+            "${R[@]}" -p tcp --syn -m multiport --dports "$TCP_PORTS" \
+                -m hashlimit --hashlimit-name vs_syn24 --hashlimit-mode srcip --hashlimit-srcmask 24 "${HL_BIG[@]}" \
+                --hashlimit-above "$(( SYN_RATE * 4 ))/second" --hashlimit-burst "$(( SYN_BURST * 4 ))" \
                 -j ANTIDDOS_D_SLIM
         fi
     fi
@@ -254,13 +297,13 @@ apply_rules() {
     if [[ -n "$SSH_PORT" ]]; then
         if [[ "$BAN_MODE" != "monitor" ]]; then
             "${R[@]}" -p tcp --syn --dport "$SSH_PORT" \
-                -m hashlimit --hashlimit-name vs_sshban --hashlimit-mode srcip \
+                -m hashlimit --hashlimit-name vs_sshban --hashlimit-mode srcip "${HL_SMALL[@]}" \
                 --hashlimit-above "$ssh_rate" --hashlimit-burst "$ssh_burst" \
                 -j VS_SSHBAN
         fi
         if [[ "$BAN_MODE" != "strict" ]]; then
             "${R[@]}" -p tcp --syn --dport "$SSH_PORT" \
-                -m hashlimit --hashlimit-name vs_ssh --hashlimit-mode srcip \
+                -m hashlimit --hashlimit-name vs_ssh --hashlimit-mode srcip "${HL_SMALL[@]}" \
                 --hashlimit-above 6/minute --hashlimit-burst 8 \
                 -j ANTIDDOS_D_SLIM
         fi
@@ -269,7 +312,7 @@ apply_rules() {
     # Web del panel (opcional): solo descarta, no bloquea, por si hay proxy delante.
     if [[ -n "$WEB_PORTS" ]]; then
         "${R[@]}" -p tcp --syn -m multiport --dports "$WEB_PORTS" \
-            -m hashlimit --hashlimit-name vs_web --hashlimit-mode srcip \
+            -m hashlimit --hashlimit-name vs_web --hashlimit-mode srcip "${HL_SMALL[@]}" \
             --hashlimit-above 60/second --hashlimit-burst 120 -j ANTIDDOS_D_WEB
     fi
 
@@ -277,7 +320,7 @@ apply_rules() {
     # flood UDP suelen estar falsificadas y bloquearlas perjudicaria a terceros.
     if [[ -n "$UDP_PORTS" ]]; then
         "${R[@]}" -p udp -m multiport --dports "$UDP_PORTS" \
-            -m hashlimit --hashlimit-name vs_udp --hashlimit-mode srcip \
+            -m hashlimit --hashlimit-name vs_udp --hashlimit-mode srcip "${HL_BIG[@]}" \
             --hashlimit-above "${UDP_RATE}/second" --hashlimit-burst "$UDP_BURST" -j ANTIDDOS_D_UDP
     fi
 
@@ -285,6 +328,11 @@ apply_rules() {
     if [[ -n "$TCP_PORTS" ]]; then
         ipt -t mangle -A ANTIDDOS_M -m set --match-set vs_white src -j RETURN
         ipt -t mangle -A ANTIDDOS_M -m set --match-set vs_white_feed src -j RETURN
+        # Paquetes TCP que no pertenecen a ninguna conexion (floods de ACK/RST/PSH):
+        # con nf_conntrack_tcp_loose=0 (ver sysctl) conntrack los marca INVALID y no
+        # llegan a ocupar la tabla de conexiones ni a Docker.
+        ipt -t mangle -A ANTIDDOS_M -p tcp -m multiport --dports "$TCP_PORTS" \
+            -m conntrack --ctstate INVALID -j ANTIDDOS_M_INV
         ipt -t mangle -A ANTIDDOS_M -p tcp --syn -m multiport --dports "$TCP_PORTS" \
             -m connlimit --connlimit-above "$CONN_LIMIT" --connlimit-mask 32 --connlimit-saddr -j DROP
     fi
@@ -299,7 +347,7 @@ apply_sysctl() {
     cat > "$SYSCTL_FILE" <<'EOF'
 # Generado por Anti-DDoS y Optimización — no editar a mano (se regenera con: antiddos-fw apply)
 net.ipv4.tcp_syncookies = 1
-net.ipv4.tcp_max_syn_backlog = 8192
+net.ipv4.tcp_max_syn_backlog = 65536
 net.ipv4.tcp_synack_retries = 2
 net.ipv4.tcp_syn_retries = 3
 net.ipv4.tcp_rfc1337 = 1
@@ -312,9 +360,19 @@ net.ipv4.conf.default.accept_redirects = 0
 net.ipv4.conf.all.send_redirects = 0
 net.ipv4.icmp_echo_ignore_broadcasts = 1
 net.ipv4.icmp_ignore_bogus_error_responses = 1
-net.core.somaxconn = 4096
-net.core.netdev_max_backlog = 16384
+net.ipv4.tcp_fin_timeout = 15
+net.core.somaxconn = 16384
+# Cola de paquetes por CPU y paquetes procesados por vuelta: bajo un flood grande
+# la tarjeta no descarta a ciegas lo que el firewall aun no ha visto.
+net.core.netdev_max_backlog = 65536
+net.core.netdev_budget = 600
+net.core.netdev_budget_usecs = 4000
 net.netfilter.nf_conntrack_max = 1048576
+# Un ACK suelto ya no «adopta» una conexion inexistente: los floods de ACK pasan a
+# ser INVALID y se descartan sin llenar la tabla de conexiones.
+net.netfilter.nf_conntrack_tcp_loose = 0
+# 6 h sin trafico en vez de 5 dias: las conexiones muertas no ocupan la tabla.
+net.netfilter.nf_conntrack_tcp_timeout_established = 21600
 net.netfilter.nf_conntrack_tcp_timeout_syn_recv = 30
 net.netfilter.nf_conntrack_tcp_timeout_syn_sent = 30
 net.netfilter.nf_conntrack_tcp_timeout_time_wait = 30
@@ -385,23 +443,49 @@ sync_feed() {
         return 1
     fi
 
-    ipset create -exist vs_feed_tmp hash:net
-    ipset create -exist vs_white_feed_tmp hash:net
-    ipset flush vs_feed_tmp
-    ipset flush vs_white_feed_tmp
+    # Una respuesta que no es un feed (p. ej. un error de PHP) no debe vaciar los bloqueos.
+    if [[ -n "$body" ]] && ! grep -qE '^[BWAC] ' <<<"$body"; then
+        warn "Respuesta del panel no válida: ${body:0:200}"
+        log "feed: respuesta no valida"
+        return 1
+    fi
 
-    local kind addr val bans=0 whites=0
-    while read -r kind addr val _; do
-        case "$kind" in
-            B) valid_ipv4 "${addr:-x}" && { ipset add -exist vs_feed_tmp "$addr"; bans=$((bans + 1)); } ;;
-            W) valid_ipv4 "${addr:-x}" && { ipset add -exist vs_white_feed_tmp "$addr"; whites=$((whites + 1)); } ;;
-            C) apply_remote_setting "${addr:-}" "${val:-}" ;;
-        esac
-    done <<<"$body"
+    # Todo se carga de golpe con «ipset restore» (un solo proceso aunque haya miles de
+    # rangos) en sets temporales que luego se intercambian: el firewall nunca se queda
+    # ni un instante sin bloqueos.
+    local restore s
+    restore="$(mktemp /tmp/antiddos-feed.XXXXXX)" || return 1
+    for s in vs_feed_tmp vs_white_feed_tmp vs_asn_tmp; do ipset destroy "$s" 2>/dev/null || true; done
+
+    local kind addr val bans=0 whites=0 nets=0
+    {
+        echo "create vs_feed_tmp hash:net maxelem ${FEED_MAXELEM}"
+        echo "create vs_white_feed_tmp hash:net maxelem ${FEED_MAXELEM}"
+        echo "create vs_asn_tmp hash:net maxelem ${NET_MAXELEM}"
+        while read -r kind addr val _; do
+            case "$kind" in
+                B) valid_ipv4 "${addr:-x}" && { echo "add vs_feed_tmp ${addr}"; bans=$((bans + 1)); } ;;
+                W) valid_ipv4 "${addr:-x}" && { echo "add vs_white_feed_tmp ${addr}"; whites=$((whites + 1)); } ;;
+                # Rango de un operador/pais: nunca mas grande que una /8.
+                A) valid_ipv4 "${addr:-x}" && [[ "$addr" == */* && "${addr#*/}" -ge 8 ]] && { echo "add vs_asn_tmp ${addr}"; nets=$((nets + 1)); } ;;
+                C) apply_remote_setting "${addr:-}" "${val:-}" >&2 ;;
+            esac
+        done <<<"$body"
+    } > "$restore"
+
+    if ! ipset -exist restore < "$restore" 2>/dev/null; then
+        warn "No se pudo cargar la lista del panel en el firewall (ipset restore); se conservan los bloqueos anteriores."
+        log "feed: fallo de ipset restore"
+        for s in vs_feed_tmp vs_white_feed_tmp vs_asn_tmp; do ipset destroy "$s" 2>/dev/null || true; done
+        rm -f "$restore"
+        return 1
+    fi
+    rm -f "$restore"
 
     ipset swap vs_feed_tmp vs_feed && ipset destroy vs_feed_tmp
     ipset swap vs_white_feed_tmp vs_white_feed && ipset destroy vs_white_feed_tmp
-    log "feed: ${bans} bloqueos, ${whites} en lista blanca"
+    ipset swap vs_asn_tmp vs_asn && ipset destroy vs_asn_tmp
+    log "feed: ${bans} bloqueos, ${nets} rangos de operadores/paises, ${whites} en lista blanca"
     return 0
 }
 
@@ -432,9 +516,9 @@ dropped_packets() {
 }
 
 build_heartbeat() {
-    local active=false mode=http ips bl bp c top net fwb
+    local active=false mode=http ips bl bp bn c top net fwb
     c="$(read_counters)"; net="$(read_net)"
-    bl="$(count_bans)"; bp="$(count_set vs_feed)"; top="$(top_ips_json)"; fwb="$(fw_bans_json)"
+    bl="$(count_bans)"; bp="$(count_set vs_feed)"; bn="$(count_set vs_asn)"; top="$(top_ips_json)"; fwb="$(fw_bans_json)"
     ipt -t raw -L ANTIDDOS -n >/dev/null 2>&1 && active=true
     panel_is_local && mode=local
     # shellcheck disable=SC2046
@@ -442,9 +526,9 @@ build_heartbeat() {
     # shellcheck disable=SC2086
     set -- $c
     local dropped=$(( ${6:-0} + ${7:-0} + ${8:-0} + ${9:-0} + ${10:-0} + ${11:-0} + ${12:-0} ))
-    printf '{"host":"%s","ips":%s,"version":"%s","active":%s,"mode":"%s","tcp":"%s","udp":"%s","attack":%s,"conn_limit":%s,"syn_rate":%s,"udp_rate":%s,"ban_seconds":%s,"bans_local":%s,"bans_panel":%s,"dropped":%s,"tcp_pkts":%s,"udp_pkts":%s,"syn":%s,"tcp_bytes":%s,"udp_bytes":%s,"drop_bytes":%s,"d_ban":%s,"d_mal":%s,"d_icmp":%s,"d_syn":%s,"d_udp":%s,"d_conn":%s,"d_web":%s,"rx_bytes":%s,"rx_pkts":%s,"tx_bytes":%s,"tx_pkts":%s,"ban_mode":"%s","fw_bans":%s,"top_ips":%s}' \
+    printf '{"host":"%s","ips":%s,"version":"%s","active":%s,"mode":"%s","tcp":"%s","udp":"%s","attack":%s,"conn_limit":%s,"syn_rate":%s,"udp_rate":%s,"ban_seconds":%s,"bans_local":%s,"bans_panel":%s,"bans_net":%s,"dropped":%s,"tcp_pkts":%s,"udp_pkts":%s,"syn":%s,"tcp_bytes":%s,"udp_bytes":%s,"drop_bytes":%s,"d_ban":%s,"d_mal":%s,"d_icmp":%s,"d_syn":%s,"d_udp":%s,"d_conn":%s,"d_web":%s,"rx_bytes":%s,"rx_pkts":%s,"tx_bytes":%s,"tx_pkts":%s,"ban_mode":"%s","fw_bans":%s,"top_ips":%s}' \
         "$(hostname)" "$ips" "$AGENT_VERSION" "$active" "$mode" "$TCP_PORTS" "$UDP_PORTS" "${ATTACK_MODE:-0}" \
-        "$CONN_LIMIT" "$SYN_RATE" "$UDP_RATE" "$BAN_SECONDS" "${bl:-0}" "${bp:-0}" "$dropped" \
+        "$CONN_LIMIT" "$SYN_RATE" "$UDP_RATE" "$BAN_SECONDS" "${bl:-0}" "${bp:-0}" "${bn:-0}" "$dropped" \
         "${1:-0}" "${2:-0}" "${3:-0}" "${4:-0}" "${5:-0}" "${13:-0}" "${6:-0}" "${7:-0}" "${8:-0}" "${9:-0}" "${10:-0}" "${11:-0}" "${12:-0}" $net "$BAN_MODE" "$fwb" "$top"
 }
 
@@ -473,10 +557,14 @@ LIVE_KEEP=300        # 300 muestras x 1 s = 5 minutos
 read_counters() {
     local raw mangle dm
     raw="$(ipt -t raw -L -v -n -x 2>/dev/null)"
-    mangle="$(ipt -t mangle -L ANTIDDOS_M -v -n -x 2>/dev/null)"
-    dm="$(awk '$3=="DROP" {p+=$1; b+=$2} END{printf "%d %d", p, b}' <<<"$mangle")"
+    mangle="$(ipt -t mangle -L -v -n -x 2>/dev/null)"
+    # mangle: ANTIDDOS_M = limite de conexiones simultaneas; ANTIDDOS_M_INV = TCP fuera de conexion (cuenta como malformado).
+    dm="$(awk '/^Chain / { chain = $2; next }
+               $3 == "DROP" && chain == "ANTIDDOS_M"     { p += $1; b += $2 }
+               $3 == "DROP" && chain == "ANTIDDOS_M_INV" { ip += $1; b += $2 }
+               END { printf "%d %d %d", p, b, ip }' <<<"$mangle")"
     awk -v dm="$dm" '
-        BEGIN { split(dm, m, " "); dconn = m[1] + 0; dbytes = m[2] + 0 }
+        BEGIN { split(dm, m, " "); dconn = m[1] + 0; dbytes = m[2] + 0; dmal = m[3] + 0 }
         /^Chain / { chain = $2; next }
         chain == "ANTIDDOS" {
             if ($3 == "ANTIDDOS_CTCP") { tcp += $1; tcpb += $2 }
@@ -622,7 +710,7 @@ cmd_remove() {
     have iptables && remove_rules
     if have ipset; then
         local s
-        for s in vs_white vs_white_feed vs_feed vs_ban vs_ban_ssh vs_ban_man vs_feed_tmp vs_white_feed_tmp; do
+        for s in vs_white vs_white_feed vs_feed vs_asn vs_ban vs_ban_ssh vs_ban_man vs_feed_tmp vs_white_feed_tmp vs_asn_tmp; do
             ipset destroy "$s" 2>/dev/null || true
         done
     fi
@@ -648,7 +736,7 @@ cmd_status() {
     echo "  Panel (sync)    : ${PANEL_URL:-no configurado}"
     if have ipset; then
         local s n
-        for s in vs_ban vs_ban_ssh vs_ban_man vs_feed vs_white vs_white_feed; do
+        for s in vs_ban vs_ban_ssh vs_ban_man vs_feed vs_asn vs_white vs_white_feed; do
             n="$(ipset list "$s" 2>/dev/null | awk '/^Number of entries:/ {print $4}')"
             printf '  %-15s : %s entradas\n' "$s" "${n:-—}"
         done
@@ -711,7 +799,7 @@ cmd_bans() {
         ipset list "${pair%%:*}" 2>/dev/null | awk -v why="${pair#*:}" '/^[0-9]+\./ {printf "  %-16s %-8s %s\n", $1, ($3=="" ? "∞" : $3 " s"), why}'
     done
     echo
-    echo "Bloqueos recibidos del panel: $(ipset list vs_feed 2>/dev/null | awk '/^Number of entries:/ {print $4}')"
+    echo "Bloqueos recibidos del panel: $(count_set vs_feed) IP(s) y $(count_set vs_asn) rango(s) de operadores/países bloqueados"
 }
 
 cmd_white_add() {
