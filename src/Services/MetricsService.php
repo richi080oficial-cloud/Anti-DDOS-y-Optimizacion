@@ -3,6 +3,7 @@
 namespace Pterodactyl\Extensions\AntiDDoS\Services;
 
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldMetric;
 
 /**
@@ -43,7 +44,23 @@ class MetricsService
      */
     public function series(string $range = '1h', ?string $host = null, string $view = 'packets'): array
     {
-        [$window, $bucket] = self::RANGES[$range] ?? self::RANGES['1h'];
+        $range = isset(self::RANGES[$range]) ? $range : '1h';
+
+        // El historial cambia como mucho cada ~25 s (una muestra por agente): no se
+        // recalcula en cada refresco de la pantalla (cada 15 s y por cada admin).
+        return Cache::remember(
+            'antiddos:metrics:' . md5($range . '|' . $host . '|' . $view),
+            $range === '1h' ? 10 : 60,
+            fn () => $this->build($range, $host, $view)
+        );
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function build(string $range, ?string $host, string $view): array
+    {
+        [$window, $bucket] = self::RANGES[$range];
 
         $now = microtime(true);
         $from = (int) floor($now) - $window;
@@ -51,17 +68,20 @@ class MetricsService
         $count = intdiv((int) floor($now) - $start, $bucket) + 1;
 
         // Se pide una muestra anterior a la ventana para poder calcular el primer incremento.
-        $rows = ShieldMetric::query()
+        // toBase() + solo las columnas necesarias: filas simples en vez de modelos de
+        // Eloquent (7 dias son ~24.000 filas por nodo; como modelos ocupaban >100 MB).
+        $rows = ShieldMetric::query()->toBase()
+            ->select(array_merge(['host', 'recorded_at', 'bans'], array_keys(self::COLUMNS)))
             ->where('recorded_at', '>=', Carbon::createFromTimestamp((int) ($from - self::GAP)))
             ->when($host !== null && $host !== '', fn ($q) => $q->where('host', $host))
             ->orderBy('host')
             ->orderBy('recorded_at')
-            ->get();
+            ->cursor();
 
         $sources = [];
 
         foreach ($rows as $row) {
-            $sample = ['t' => (float) $row->recorded_at->getTimestamp(), 'bans' => (int) $row->bans];
+            $sample = ['t' => (float) strtotime((string) $row->recorded_at), 'bans' => (int) $row->bans];
 
             foreach (self::COLUMNS as $column => $counter) {
                 $sample[$counter] = (int) $row->{$column};

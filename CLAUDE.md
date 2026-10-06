@@ -1,6 +1,6 @@
 # Anti-DDoS y Optimización para Pterodactyl — MEMORIA DEL PROYECTO
 
-> **Lee este archivo entero antes de tocar nada.** Resume el proyecto, cómo trabaja el usuario, la arquitectura, las trampas ya conocidas y todo lo hecho en la sesión que lo creó. Versión actual del código: **1.9.0** (`VERSION`). Rama de trabajo: **`main`** (única).
+> **Lee este archivo entero antes de tocar nada.** Resume el proyecto, cómo trabaja el usuario, la arquitectura, las trampas ya conocidas y todo lo hecho en la sesión que lo creó. Versión actual del código: **1.9.1** (`VERSION`). Rama de trabajo: **`main`** (única).
 
 ---
 
@@ -199,6 +199,7 @@ sudo antiddos status ; systemctl is-active antiddos-live
 | 1.7.0 | Gráfica «como OVH»: **↓RX/↑TX de la interfaz**, paquetes/s, **motivos de frenado** apilados, unidades, suavizado, escala log, pausa, CSV, estadísticas, **top de IPs**. Motor único `TrafficEngine`. |
 | 1.8.0 | **Origen y reputación de IPs** (país/ASN/listas públicas/AbuseIPDB) con veredicto; **política de bloqueo** (monitor/balanced/strict) para evitar falsos positivos; bloqueos del firewall con motivo y botón «Es legítima»; `SafeIps`. |
 | 1.9.0 | Petición urgente: DDoS desde **AS199585** (TELNET Ropczyce, Polonia, ~2.300 IPs, «Operador / residencial») que cambia de IP. **Bloqueo de operadores (ASN) y países** desde el panel (cuadro rápido «Bloquear operador (ASN)» en la cabecera, visible en todas las pestañas; pestaña propia «Operadores (ASN)» = `#asn`; botón rojo «🚫 Bloquear ASxxxx» en Tráfico), CLI `asn`/`country`, feed `A`, set `vs_asn`, 403 en el panel, regla para Cloudflare WAF. **Firewall endurecido** para floods grandes (el usuario habló de «solicitudes de hasta 107 M»): tablas hashlimit grandes, amplificación UDP, TCP INVALID/ACK floods, /24 en modo ataque, sysctl, sync con `ipset restore`. Arreglado: `antiddos ip` no estaba enlazado en el gestor; `extension.json` estaba en 1.1.0. |
+| 1.9.1 | **Optimización de consumo** (el usuario dijo que «Pterodactyl entero gasta 4.7 G»). Panel: `BlockManager::remaining` usa una clave de caché por IP (`antiddos:blk:ip:*` + `antiddos:blk:ready`, un `Cache::many` por petición) en vez del mapa entero; `MetricsService` con `toBase()->select()->cursor()` + caché 10/60 s; tablas top/fw_bans cacheadas 3 s; `ReputationLists` con resumen `antiddos:rep:meta:*` y memo por proceso. Nodo: acción artisan **`sync`** (latido + feed en un arranque de PHP); `sync_feed` se salta si md5(agent.conf + feed) no cambió (`/run/antiddos/feed.sum`, se borra en `apply`/`remove`); `cmd_watch` con muestras en array de bash, `read_net_var`/`now_ms_var` sin procesos, espera con `read -t` sobre una tubería, bloqueos contados cada 5 s con `ipset -t`; `read_counters` con un solo awk. |
 
 Decisiones del usuario a recordar: quitar la optimización; una sola rama; el nombre se queda; quería ver **por qué** se bloquea cada cosa y evitar bloqueos sin sentido; quiere datos **precisos y veraces** en la gráfica.
 

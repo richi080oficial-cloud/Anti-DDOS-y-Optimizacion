@@ -30,6 +30,9 @@ class ReputationLists
 
     protected const TTL = 60 * 60 * 24 * 3;   // se conservan 3 dias si la descarga siguiente falla
 
+    /** @var array<string, array<string, mixed>|false> listas ya leidas de la cache en este proceso */
+    protected static array $loaded = [];
+
     /**
      * Descarga todas las listas. Cada una es independiente: un fallo no borra la
      * copia anterior.
@@ -55,6 +58,8 @@ class ReputationLists
                 }
 
                 Cache::put("antiddos:rep:{$id}", ['at' => time()] + $this->index($ranges), self::TTL);
+                Cache::put("antiddos:rep:meta:{$id}", ['at' => time(), 'count' => count($ranges)], self::TTL);
+                unset(self::$loaded[$id]);
                 $out[$id] = ['ok' => true, 'count' => count($ranges), 'error' => null];
             } catch (\Throwable $e) {
                 $out[$id] = ['ok' => false, 'count' => 0, 'error' => mb_substr($e->getMessage(), 0, 120)];
@@ -83,7 +88,8 @@ class ReputationLists
         $found = [];
 
         foreach (self::SOURCES as $id => [$name, , $kind]) {
-            $data = Cache::get("antiddos:rep:{$id}");
+            // Cada lista ocupa varios MB: se lee de la cache una sola vez por proceso.
+            $data = self::$loaded[$id] ??= Cache::get("antiddos:rep:{$id}") ?? false;
 
             if (is_array($data) && $this->contains($data, $n)) {
                 $found[$id] = ['name' => $name, 'kind' => $kind];
@@ -103,16 +109,42 @@ class ReputationLists
         $out = [];
 
         foreach (self::SOURCES as $id => [$name]) {
-            $data = Cache::get("antiddos:rep:{$id}");
+            $meta = $this->meta($id);
             $out[$id] = [
                 'name' => $name,
-                'loaded' => is_array($data),
-                'count' => is_array($data) ? count($data['starts']) : 0,
-                'updated_at' => is_array($data) ? ($data['at'] ?? null) : null,
+                'loaded' => $meta !== null,
+                'count' => $meta['count'] ?? 0,
+                'updated_at' => $meta['at'] ?? null,
             ];
         }
 
         return $out;
+    }
+
+    /**
+     * Resumen pequeno de una lista (fecha y entradas) sin cargar la lista entera.
+     *
+     * @return array{at: int|null, count: int}|null
+     */
+    protected function meta(string $id): ?array
+    {
+        $meta = Cache::get("antiddos:rep:meta:{$id}");
+
+        if (is_array($meta)) {
+            return $meta;
+        }
+
+        // Listas descargadas por una version anterior (sin resumen): se crea una vez.
+        $data = Cache::get("antiddos:rep:{$id}");
+
+        if (!is_array($data)) {
+            return null;
+        }
+
+        $meta = ['at' => $data['at'] ?? null, 'count' => count($data['starts'] ?? [])];
+        Cache::put("antiddos:rep:meta:{$id}", $meta, self::TTL);
+
+        return $meta;
     }
 
     public function anyLoaded(): bool

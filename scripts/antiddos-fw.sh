@@ -433,11 +433,16 @@ apply_remote_setting() {
     log "ajuste del panel: ${key}=${val:-<vacio>}"
 }
 
+FEED_SUM="/run/antiddos/feed.sum"
+
+# sync_feed [cuerpo]: aplica la lista del panel (la descarga si no se le pasa).
 sync_feed() {
     [[ -n "$PANEL_DIR" || ( -n "$PANEL_URL" && -n "$API_KEY" ) ]] || return 0
 
     local body
-    if ! body="$(fetch_feed)"; then
+    if [[ $# -gt 0 ]]; then
+        body="$1"
+    elif ! body="$(fetch_feed)"; then
         warn "No se pudo obtener la lista del panel: ${body:0:200}"
         log "feed: fallo de descarga"
         return 1
@@ -448,6 +453,16 @@ sync_feed() {
         warn "Respuesta del panel no válida: ${body:0:200}"
         log "feed: respuesta no valida"
         return 1
+    fi
+
+    # Si la lista y agent.conf no han cambiado desde la ultima vez (lo normal cada 30 s)
+    # no hay nada que hacer: no se recargan miles de rangos para nada. Se recarga
+    # igualmente si los sets estan vacios (p. ej. tras un «fw remove»).
+    local sum prev=""
+    sum="$( { cat "$CONF" 2>/dev/null; printf '%s' "$body"; } | md5sum)"; sum="${sum%% *}"
+    [[ -r "$FEED_SUM" ]] && read -r prev < "$FEED_SUM"
+    if [[ -n "$sum" && "$sum" == "$prev" && "$(count_set vs_white_feed)" != "0" ]]; then
+        return 0
     fi
 
     # Todo se carga de golpe con «ipset restore» (un solo proceso aunque haya miles de
@@ -486,16 +501,21 @@ sync_feed() {
     ipset swap vs_white_feed_tmp vs_white_feed && ipset destroy vs_white_feed_tmp
     ipset swap vs_asn_tmp vs_asn && ipset destroy vs_asn_tmp
     log "feed: ${bans} bloqueos, ${nets} rangos de operadores/paises, ${whites} en lista blanca"
+
+    # La firma se calcula de nuevo: un ajuste «C» puede haber cambiado agent.conf.
+    mkdir -p "${FEED_SUM%/*}" 2>/dev/null
+    sum="$( { cat "$CONF" 2>/dev/null; printf '%s' "$body"; } | md5sum)"
+    printf '%s\n' "${sum%% *}" > "$FEED_SUM" 2>/dev/null || true
     return 0
 }
 
 # ── Informe de estado al panel ────────────────────────────────────────────────
 json_arr() { local out="" x; for x in "$@"; do out+="${out:+,}\"${x}\""; done; echo "[${out}]"; }
 
+# IPs bloqueadas localmente (los 3 sets). Una sola llamada a ipset y solo cabeceras
+# (-t): no vuelca las miles de IPs que puede haber durante un ataque.
 count_bans() {
-    local n=0 x
-    for x in vs_ban vs_ban_ssh vs_ban_man; do n=$(( n + $(count_set "$x" || echo 0) + 0 )); done
-    echo "$n"
+    ipset -t list 2>/dev/null | awk '/^Name:/ { n = $2 } /^Number of entries:/ && (n == "vs_ban" || n == "vs_ban_ssh" || n == "vs_ban_man") { s += $4 } END { print s + 0 }'
 }
 
 # Bloqueos locales activos con motivo y segundos restantes (JSON, maximo 30).
@@ -504,12 +524,13 @@ fw_bans_json() {
     {
         for pair in "vs_ban:syn" "vs_ban_ssh:ssh" "vs_ban_man:manual"; do
             set="${pair%%:*}"; why="${pair##*:}"
-            ipset list "$set" 2>/dev/null | awk -v why="$why" '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/ { print $1, ($3 == "" ? 0 : $3), why }'
+            # awk sale en cuanto tiene 30: ipset deja de volcar el resto del set.
+            ipset list "$set" 2>/dev/null | awk -v why="$why" '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/ { print $1, ($3 == "" ? 0 : $3), why; if (++n >= 30) exit }'
         done
     } | head -30 | awk 'BEGIN { printf "[" } { printf "%s{\"ip\":\"%s\",\"left\":%d,\"why\":\"%s\"}", (NR > 1 ? "," : ""), $1, $2, $3 } END { print "]" }'
 }
 
-count_set() { ipset list "$1" 2>/dev/null | awk '/^Number of entries:/ {print $4}' | head -1; }
+count_set() { ipset -t list "$1" 2>/dev/null | awk '/^Number of entries:/ { print $4; exit }'; }
 
 dropped_packets() {
     read_counters | awk '{print $6 + $7 + $8 + $9 + $10 + $11 + $12}'
@@ -554,17 +575,10 @@ LIVE_KEEP=300        # 300 muestras x 1 s = 5 minutos
 # Una sola lectura de raw y otra de mangle. Imprime 13 numeros:
 #   tcp udp syn  tcp_bytes udp_bytes  d_ban d_mal d_icmp d_syn d_udp d_conn d_web  drop_bytes
 # (paquetes recibidos hacia los puertos protegidos y paquetes frenados por motivo).
+# Se ejecuta cada segundo: las dos tablas van a un solo awk (los nombres de las
+# cadenas no se repiten entre raw y mangle).
 read_counters() {
-    local raw mangle dm
-    raw="$(ipt -t raw -L -v -n -x 2>/dev/null)"
-    mangle="$(ipt -t mangle -L -v -n -x 2>/dev/null)"
-    # mangle: ANTIDDOS_M = limite de conexiones simultaneas; ANTIDDOS_M_INV = TCP fuera de conexion (cuenta como malformado).
-    dm="$(awk '/^Chain / { chain = $2; next }
-               $3 == "DROP" && chain == "ANTIDDOS_M"     { p += $1; b += $2 }
-               $3 == "DROP" && chain == "ANTIDDOS_M_INV" { ip += $1; b += $2 }
-               END { printf "%d %d %d", p, b, ip }' <<<"$mangle")"
-    awk -v dm="$dm" '
-        BEGIN { split(dm, m, " "); dconn = m[1] + 0; dbytes = m[2] + 0; dmal = m[3] + 0 }
+    { ipt -t raw -L -v -n -x 2>/dev/null; ipt -t mangle -L -v -n -x 2>/dev/null; } | awk '
         /^Chain / { chain = $2; next }
         chain == "ANTIDDOS" {
             if ($3 == "ANTIDDOS_CTCP") { tcp += $1; tcpb += $2 }
@@ -578,8 +592,11 @@ read_counters() {
             if (chain == "ANTIDDOS_D_UDP")  { dudp  += $1; dbytes += $2 }
             if (chain == "ANTIDDOS_D_WEB")  { dweb  += $1; dbytes += $2 }
             if (chain == "VS_SYNFLOOD" || chain == "VS_SSHBAN" || chain == "ANTIDDOS_D_SLIM") { dsyn += $1; dbytes += $2 }
+            # mangle: limite de conexiones simultaneas y TCP fuera de conexion (cuenta como malformado).
+            if (chain == "ANTIDDOS_M")      { dconn += $1; dbytes += $2 }
+            if (chain == "ANTIDDOS_M_INV")  { dmal  += $1; dbytes += $2 }
         }
-        END { printf "%d %d %d %d %d %d %d %d %d %d %d %d %d\n", tcp, udp, syn, tcpb, udpb, dban, dmal, dicmp, dsyn, dudp, dconn, dweb, dbytes }' <<<"$raw"
+        END { printf "%d %d %d %d %d %d %d %d %d %d %d %d %d\n", tcp, udp, syn, tcpb, udpb, dban, dmal, dicmp, dsyn, dudp, dconn, dweb, dbytes }'
 }
 
 # Interfaz publica: la de la ruta por defecto (o NET_IFACE si se fuerza en agent.conf).
@@ -593,19 +610,33 @@ net_iface() {
 
 # Contadores de la tarjeta de red (como la grafica de OVH): "rx_bytes rx_pkts tx_bytes tx_pkts".
 read_net() {
-    local dev="${1:-$(net_iface)}"
-    [[ -n "$dev" ]] || { echo "0 0 0 0"; return; }
-    awk -v dev="$dev" '{ line = $0; sub(/^[ \t]+/, "", line); n = index(line, ":"); if (n == 0) next
-            name = substr(line, 1, n - 1); if (name != dev) next
-            split(substr(line, n + 1), f, " ")
-            printf "%d %d %d %d\n", f[1], f[2], f[9], f[10]; found = 1 }
-        END { if (!found) print "0 0 0 0" }' /proc/net/dev 2>/dev/null
+    read_net_var "${1:-$(net_iface)}"
+    echo "$NET"
+}
+
+# Igual que read_net pero deja el resultado en $NET, sin lanzar ningun proceso
+# (solo lecturas de bash): es lo que usa el bucle de cada segundo.
+read_net_var() {
+    local dev="$1" line name
+    local -a f
+    NET="0 0 0 0"
+    [[ -n "$dev" && -r /proc/net/dev ]] || return 0
+    while IFS= read -r line; do
+        name="${line%%:*}"; name="${name//[[:space:]]/}"
+        [[ "$line" == *:* && "$name" == "$dev" ]] || continue
+        read -r -a f <<<"${line#*:}"
+        NET="${f[0]:-0} ${f[1]:-0} ${f[8]:-0} ${f[9]:-0}"
+        return 0
+    done < /proc/net/dev
 }
 
 # Hora con milisegundos (mas precision para calcular velocidades).
-now_ms() {
+now_ms() { now_ms_var; printf '%s' "$NOW_MS"; }
+
+# Igual que now_ms pero en $NOW_MS y sin procesos (EPOCHREALTIME de bash 5).
+now_ms_var() {
     local t="${EPOCHREALTIME:-}"
-    if [[ -n "$t" ]]; then t="${t/,/.}"; printf '%s' "${t%???}"; else date +%s.%3N 2>/dev/null || date +%s; fi
+    if [[ -n "$t" ]]; then t="${t/,/.}"; NOW_MS="${t%???}"; else NOW_MS="$(date +%s.%3N 2>/dev/null || date +%s)"; fi
 }
 
 # Las 10 IPs externas con mas conexiones hacia los puertos protegidos (JSON).
@@ -628,50 +659,59 @@ top_ips_json() {
 # Bucle del servicio antiddos-live: lee los contadores cada segundo, guarda los ultimos
 # 5 minutos en un archivo que el panel lee directamente (panel en la misma maquina)
 # y, si el panel esta en otra, envia cada muestra por HTTPS.
+#
+# Pensado para gastar lo minimo: las muestras viven en memoria (array de bash, ya
+# convertidas a JSON), la hora, la tarjeta de red y la espera no lanzan procesos y
+# los bloqueos se cuentan cada 5 s. Por segundo solo se lanzan 2 iptables + 1 awk
+# (contadores) + 1 mv (archivo atomico); antes eran unos 14 procesos.
 cmd_watch() {
     require_root; require_tools
+    umask 022
     mkdir -p "$LIVE_DIR"; chmod 755 "$LIVE_DIR"
-    : > "$LIVE_RING"
+    rm -f "$LIVE_RING"
     info "Modo en vivo activo: contadores cada ${LIVE_EVERY} s (${LIVE_JSON})."
-    local loops=0
 
-    local ts line net host bans_now dev
+    local loops=0 line host dev bans_now=0 obj joined oldifs remote sfd=""
+    local -a ring=() c=()
     host="$(hostname)"
     dev="$(net_iface)"
 
+    # Espera sin lanzar «sleep» cada segundo: read con tiempo limite sobre una
+    # tuberia que nunca recibe datos. Si no se puede abrir, se usa sleep.
+    exec {sfd}<> <(:) || sfd=""
+
     while true; do
+        # agent.conf se relee en cada vuelta (el panel puede cambiarlo): es un
+        # «source» de bash, sin procesos.
         load_conf
-        ts="$(now_ms)"
+        remote=0
+        if ! panel_is_local && [[ -n "$PANEL_URL" && -n "$API_KEY" ]] && have curl; then remote=1; fi
+
+        now_ms_var
         line="$(read_counters)"
-        net="$(read_net "$dev")"
+        read_net_var "$dev"
         (( loops % 60 == 0 )) && dev="$(net_iface)"
-        bans_now="$(count_bans)"
-        echo "${ts} ${line} ${net} ${bans_now}" >> "$LIVE_RING"
-
-        # El archivo se recorta cada 60 vueltas (no en cada una, para gastar poco);
-        # el JSON solo incluye siempre las ultimas LIVE_KEEP muestras.
+        (( loops % 5 == 0 )) && bans_now="$(count_bans)"
         loops=$((loops + 1))
-        if (( loops % 60 == 0 )); then
-            tail -n "$LIVE_KEEP" "$LIVE_RING" > "${LIVE_RING}.tmp" && mv -f "${LIVE_RING}.tmp" "$LIVE_RING"
-        fi
 
-        tail -n "$LIVE_KEEP" "$LIVE_RING" | awk -v host="$host" '
-            BEGIN { printf "{\"host\":\"%s\",\"samples\":[", host }
-            { printf "%s{\"t\":%s,\"tcp\":%s,\"udp\":%s,\"syn\":%s,\"tcp_b\":%s,\"udp_b\":%s,\"d_ban\":%s,\"d_mal\":%s,\"d_icmp\":%s,\"d_syn\":%s,\"d_udp\":%s,\"d_conn\":%s,\"d_web\":%s,\"d_bytes\":%s,\"rx_b\":%s,\"rx_p\":%s,\"tx_b\":%s,\"tx_p\":%s,\"bans\":%s}", (NR > 1 ? "," : ""), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19 }
-            END { print "]}" }' > "${LIVE_JSON}.tmp" && chmod 644 "${LIVE_JSON}.tmp" && mv -f "${LIVE_JSON}.tmp" "$LIVE_JSON"
+        read -r -a c <<<"${line} ${NET}"
+        printf -v obj '{"t":%s,"tcp":%s,"udp":%s,"syn":%s,"tcp_b":%s,"udp_b":%s,"d_ban":%s,"d_mal":%s,"d_icmp":%s,"d_syn":%s,"d_udp":%s,"d_conn":%s,"d_web":%s,"d_bytes":%s,"rx_b":%s,"rx_p":%s,"tx_b":%s,"tx_p":%s,"bans":%s}' \
+            "$NOW_MS" "${c[0]:-0}" "${c[1]:-0}" "${c[2]:-0}" "${c[3]:-0}" "${c[4]:-0}" "${c[5]:-0}" "${c[6]:-0}" "${c[7]:-0}" "${c[8]:-0}" \
+            "${c[9]:-0}" "${c[10]:-0}" "${c[11]:-0}" "${c[12]:-0}" "${c[13]:-0}" "${c[14]:-0}" "${c[15]:-0}" "${c[16]:-0}" "${bans_now:-0}"
+
+        ring+=("$obj")
+        if (( ${#ring[@]} > LIVE_KEEP )); then ring=("${ring[@]: -LIVE_KEEP}"); fi
+
+        oldifs="$IFS"; IFS=,; joined="${ring[*]}"; IFS="$oldifs"
+        printf '{"host":"%s","samples":[%s]}\n' "$host" "$joined" > "${LIVE_JSON}.tmp" && mv -f "${LIVE_JSON}.tmp" "$LIVE_JSON"
 
         # Panel en otra maquina: se envia la muestra (en segundo plano, sin frenar el bucle).
-        if ! panel_is_local && [[ -n "$PANEL_URL" && -n "$API_KEY" ]] && have curl; then
-            # shellcheck disable=SC2086
-            set -- $net; local rxb=$1 rxp=$2 txb=$3 txp=$4
-            # shellcheck disable=SC2086
-            set -- $line
+        if [[ "$remote" == "1" ]]; then
             ( curl -fsS --max-time 2 -X POST -H "X-Antiddos-Key: ${API_KEY}" -H "Content-Type: application/json" \
-                --data "{\"host\":\"${host}\",\"t\":${ts},\"tcp\":$1,\"udp\":$2,\"syn\":$3,\"tcp_b\":$4,\"udp_b\":$5,\"d_ban\":$6,\"d_mal\":$7,\"d_icmp\":$8,\"d_syn\":$9,\"d_udp\":${10},\"d_conn\":${11},\"d_web\":${12},\"d_bytes\":${13},\"rx_b\":${rxb},\"rx_p\":${rxp},\"tx_b\":${txb},\"tx_p\":${txp},\"bans\":${bans_now}}" \
-                "${PANEL_URL%/}/api/antiddos/live" >/dev/null 2>&1 & )
+                --data "{\"host\":\"${host}\",${obj:1}" "${PANEL_URL%/}/api/antiddos/live" >/dev/null 2>&1 & )
         fi
 
-        sleep "$LIVE_EVERY"
+        if [[ -n "$sfd" ]]; then read -r -t "$LIVE_EVERY" -u "$sfd" _ || true; else sleep "$LIVE_EVERY"; fi
     done
 }
 
@@ -680,7 +720,17 @@ cmd_watch() {
 cmd_sync() {
     require_root; require_tools
     create_sets
-    sync_feed || true
+
+    # Panel en esta maquina: latido y lista en UN solo arranque de PHP (antes eran dos
+    # cada 30 s). Si el panel es antiguo y no conoce «sync», se hace como antes.
+    local body sent=0
+    if panel_is_local && body="$(panel_artisan sync --payload="$(build_heartbeat)" 2>&1)" && grep -qE '^[BWAC] ' <<<"$body"; then
+        sync_feed "$body" || true
+        sent=1
+    else
+        sync_feed || true
+    fi
+
     if [[ "$CONF_CHANGED" == "1" ]]; then
         load_conf
         load_whitelist
@@ -688,12 +738,13 @@ cmd_sync() {
         apply_sysctl
         log "reglas reaplicadas por cambios del panel (tcp=${TCP_PORTS} udp=${UDP_PORTS} attack=${ATTACK_MODE})"
     fi
-    send_heartbeat
+    [[ "$sent" == "1" ]] || send_heartbeat
 }
 
 # ── Comandos ──────────────────────────────────────────────────────────────────
 cmd_apply() {
     require_root; require_tools
+    rm -f "$FEED_SUM"      # apply siempre recarga la lista completa
     create_sets
     load_whitelist
     sync_feed || true
@@ -707,6 +758,7 @@ cmd_apply() {
 
 cmd_remove() {
     require_root
+    rm -f "$FEED_SUM"
     have iptables && remove_rules
     if have ipset; then
         local s

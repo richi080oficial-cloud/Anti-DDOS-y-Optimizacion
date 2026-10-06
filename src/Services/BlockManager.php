@@ -21,6 +21,10 @@ class BlockManager
 {
     public const CACHE_KEY = 'antiddos:blocklist';
 
+    /** Una clave por IP bloqueada (valor: caducidad, 0 = permanente) y la marca de «indice creado». */
+    protected const IP_KEY = 'antiddos:blk:ip:';
+    protected const READY_KEY = 'antiddos:blk:ready';
+
     /** Segundos que vive el mapa en cache (tambien es la demora maxima de un desbloqueo en otro worker). */
     protected const MAP_TTL = 30;
 
@@ -57,16 +61,55 @@ class BlockManager
         return $map[$ip] === 0 || $map[$ip] > time();
     }
 
-    /** Segundos que le quedan al bloqueo (0 = permanente, null = no esta bloqueada). */
+    /**
+     * Segundos que le quedan al bloqueo (0 = permanente, null = no esta bloqueada).
+     *
+     * Es lo que consulta el escudo web en CADA peticion, asi que no carga el mapa
+     * entero (en un ataque puede tener miles de IPs): cada IP bloqueada tiene su
+     * propia clave en cache y se piden las dos claves de una vez (MGET en Redis).
+     */
     public function remaining(string $ip): ?int
     {
-        $map = $this->map();
+        $key = self::IP_KEY . $ip;
+        $values = Cache::many([self::READY_KEY, $key]);
 
-        if (!array_key_exists($ip, $map)) {
+        if (empty($values[self::READY_KEY])) {
+            $this->index();
+            $exp = Cache::get($key);
+        } else {
+            $exp = $values[$key] ?? null;
+        }
+
+        if ($exp === null || $exp === false) {
             return null;
         }
 
-        return $map[$ip] === 0 ? 0 : max(0, $map[$ip] - time());
+        $exp = (int) $exp;
+
+        if ($exp !== 0 && $exp <= time()) {
+            return null;
+        }
+
+        return $exp === 0 ? 0 : $exp - time();
+    }
+
+    /** Crea las claves por IP a partir de la BD (tras reiniciar la cache o una vez al dia). */
+    protected function index(): void
+    {
+        foreach ($this->map() as $ip => $exp) {
+            $this->remember((string) $ip, (int) $exp);
+        }
+
+        Cache::put(self::READY_KEY, 1, 86400);
+    }
+
+    protected function remember(string $ip, int $exp): void
+    {
+        if ($exp === 0) {
+            Cache::forever(self::IP_KEY . $ip, 0);
+        } elseif ($exp > time()) {
+            Cache::put(self::IP_KEY . $ip, $exp, $exp - time() + 5);
+        }
     }
 
     /**
@@ -90,6 +133,7 @@ class BlockManager
         $block->save();
 
         $this->flush();
+        $this->remember($ip, $block->expires_at ? $block->expires_at->getTimestamp() : 0);
 
         ShieldEvent::record(
             $source === 'auto' ? 'auto-ban' : 'ban',
@@ -121,6 +165,7 @@ class BlockManager
         $deleted = ShieldBlock::query()->where('ip', $ip)->delete() > 0;
 
         $this->flush();
+        Cache::forget(self::IP_KEY . $ip);
 
         if ($deleted) {
             ShieldEvent::record('unban', "IP {$ip} desbloqueada", $ip);

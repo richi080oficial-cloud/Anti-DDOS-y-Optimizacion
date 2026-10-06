@@ -263,8 +263,14 @@ class AdminController extends Controller
             ? $this->live->series($host, $view)
             : $this->metrics->series($range, $host, $view);
 
-        $response['top'] = $this->topIps($host, $request->ip());
-        $response['fw_bans'] = $this->firewallBans($host, $request->ip());
+        // Las tablas de IPs cambian cada ~30 s (latido del agente): se recalculan como mucho
+        // cada 3 s aunque la gráfica se pida cada segundo.
+        $tables = Cache::remember('antiddos:tables:' . md5($host . '|' . $request->ip()), 3, fn () => [
+            'top' => $this->topIps($host, $request->ip()),
+            'fw_bans' => $this->firewallBans($host, $request->ip()),
+        ]);
+        $response['top'] = $tables['top'];
+        $response['fw_bans'] = $tables['fw_bans'];
         $response['ban_mode'] = (string) (ShieldSetting::read('fw_ban_mode', '') ?: 'balanced');
 
         return (new JsonResponse($response))->header('Cache-Control', 'no-store');

@@ -20,7 +20,7 @@ use Pterodactyl\Extensions\AntiDDoS\Services\SafeIps;
 class ShieldCommand extends Command
 {
     protected $signature = 'antiddos:manage
-                            {action=info : info | ip | refresh-lists | apikey | purge | prune | feed | ban | unban | bans | whitelist | asn | country | refresh-nets}
+                            {action=info : info | ip | refresh-lists | apikey | purge | prune | feed | ban | unban | bans | whitelist | asn | country | refresh-nets | heartbeat | sync}
                             {args?* : Argumentos de la accion (IP, add|del|list, block|unblock|list AS199585)}
                             {--key= : Clave concreta a usar con la accion apikey}
                             {--if-missing : Con apikey, no hace nada si ya existe una clave}
@@ -61,6 +61,7 @@ class ShieldCommand extends Command
             'refresh-lists' => $this->refreshLists(),
             'feed' => $this->feed($blocks),
             'heartbeat' => $this->heartbeat(),
+            'sync' => $this->sync($blocks),
             'ban' => $this->ban($blocks, $args),
             'unban' => $this->unban($blocks, $args),
             'bans' => $this->bans($blocks),
@@ -213,6 +214,26 @@ class ShieldCommand extends Command
         }
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Latido + lista en una sola ejecucion (agente local): arrancar PHP/Laravel es lo
+     * mas caro de la sincronizacion, asi se hace una vez cada 30 s en vez de dos.
+     * Un latido no valido nunca impide entregar la lista.
+     */
+    protected function sync(BlockManager $blocks): int
+    {
+        $data = json_decode((string) $this->option('payload'), true);
+
+        if (is_array($data)) {
+            try {
+                app(AgentRegistry::class)->record($data);
+            } catch (\Throwable $e) {
+                // Sin tabla de agentes (migracion pendiente): la lista se entrega igual.
+            }
+        }
+
+        return $this->feed($blocks);
     }
 
     /** Lista de bloqueos y lista blanca en texto plano (la lee el agente de nodo local). */
