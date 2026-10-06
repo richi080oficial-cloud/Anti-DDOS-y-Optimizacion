@@ -317,7 +317,7 @@
                     <div class="card">
                         <div class="card-h"><h3>Modo «bajo ataque»</h3></div>
                         <div class="card-b">
-                            <p class="muted">Endurece los límites de todos los nodos de golpe (conexiones y ráfagas ÷3, bloqueos ×4). Úsalo cuando notes un ataque y desactívalo al terminar.</p>
+                            <p class="muted">Endurece los límites de todos los nodos de golpe, <b>solo para IPs desconocidas</b> (límite de conexiones y de conexiones nuevas a la mitad y, además, por red /24). Los jugadores que ya tienen una sesión establecida (se recuerdan 6 h), las redes compartidas, los proxies y la consola de Wings <b>conservan los límites normales</b>, así no se corta a nadie. Úsalo cuando notes un ataque y desactívalo al terminar.</p>
                             <form action="{{ route('admin.extensions.antiddos.attack') }}" method="POST">
                                 @csrf
                                 <input type="hidden" name="mode" value="{{ $fw['attack'] ? 'off' : 'on' }}">

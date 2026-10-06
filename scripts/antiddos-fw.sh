@@ -16,7 +16,7 @@
 #   antiddos-fw white-del CIDR   Quita de la lista blanca
 #   antiddos-fw white-list       Muestra la lista blanca
 #   antiddos-fw sync             Descarga bloqueos/lista blanca del panel
-#   antiddos-fw attack on|off    Modo "bajo ataque" (limites mucho mas estrictos)
+#   antiddos-fw attack on|off    Modo "bajo ataque" (limites mas estrictos solo para IPs desconocidas)
 #   antiddos-fw set CLAVE VALOR  Cambia un valor de /etc/antiddos/agent.conf
 #
 # Como funciona (de menos a mas coste de CPU):
@@ -61,19 +61,18 @@ load_conf() {
     STATIC_WHITELIST="127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
     EXTRA_WHITELIST=""       # IPs/CIDR adicionales separados por espacio
     NET_IFACE=""             # interfaz publica para RX/TX (vacio = la de la ruta por defecto)
+    EXCLUDE_PORTS=""         # puertos que NUNCA se protegen (ademas de SSH, 80, 443 y los de Wings)
     BAN_MODE="balanced"      # monitor = nunca bloquea IPs (solo frena el exceso) | balanced = bloquea solo ante floods claros | strict = bloquea al primer exceso
 
     # shellcheck disable=SC1090
     [[ -f "$CONF" ]] && . "$CONF"
 
+    # En modo «bajo ataque» los limites base NO cambian: lo que se endurece son reglas
+    # EXTRA que solo afectan a IPs desconocidas (sin sesion establecida reciente, ver
+    # apply_rules). Asi los jugadores que ya estan conectados, las redes compartidas y
+    # los proxies no se quedan en un «limbo» al activarlo.
     if [[ "${ATTACK_MODE}" == "1" ]]; then
-        CONN_LIMIT=$(( CONN_LIMIT / 3 > 5 ? CONN_LIMIT / 3 : 5 ))
-        SYN_RATE=$(( SYN_RATE / 3 > 3 ? SYN_RATE / 3 : 3 ))
-        SYN_BURST=$(( SYN_BURST / 3 > 6 ? SYN_BURST / 3 : 6 ))
-        UDP_RATE=$(( UDP_RATE / 3 > 100 ? UDP_RATE / 3 : 100 ))
-        UDP_BURST=$(( UDP_BURST / 3 > 200 ? UDP_BURST / 3 : 200 ))
         ICMP_RATE=1
-        BAN_SECONDS=$(( BAN_SECONDS * 4 ))
     fi
 }
 
@@ -127,6 +126,9 @@ create_sets() {
     # Un set por motivo, para poder decir exactamente por que esta bloqueada cada IP.
     ipset create -exist vs_ban_ssh    hash:ip timeout 0 maxelem 65536
     ipset create -exist vs_ban_man    hash:ip timeout 0 maxelem 65536
+    # IPs con una sesion establecida reciente hacia los puertos protegidos (jugadores reales, redes
+    # compartidas, proxies): en modo «bajo ataque» quedan fuera de los limites extra.
+    ipset create -exist vs_trusted    hash:ip timeout 0 maxelem 262144
     # Rangos de operadores (ASN) y paises bloqueados desde el panel (lineas "A" del feed).
     ipset create -exist vs_asn        hash:net maxelem "$NET_MAXELEM"
 }
@@ -164,6 +166,61 @@ load_whitelist() {
     for own in $(hostname -I 2>/dev/null); do
         valid_ipv4 "$own" && ipset add -exist vs_white "$own"
     done
+}
+
+# ── Puertos: sin los reservados y en grupos de 15 ─────────────────────────────
+# Puertos de servicios propios que NUNCA se protegen aunque caigan dentro de un rango de
+# Minecraft (p. ej. 8000:8092 contiene el 8080 de Wings: ahi se conectan los navegadores
+# a la consola y a los archivos de los servidores): SSH, 80, 443, la API y el SFTP de
+# Wings (se leen de /etc/pterodactyl/config.yml) y EXCLUDE_PORTS.
+reserved_ports() {
+    local cfg=/etc/pterodactyl/config.yml api="" sftp="" list
+    if [[ -r "$cfg" ]]; then
+        api="$(awk '/^api:/ { a = 1; next } /^[A-Za-z]/ { a = 0 } a && $1 == "port:" { print $2; exit }' "$cfg" 2>/dev/null)"
+        sftp="$(awk '/^[ \t]+sftp:/ { s = 1; next } /^[A-Za-z]/ { s = 0 } s && $1 == "bind_port:" { print $2; exit }' "$cfg" 2>/dev/null)"
+    fi
+    [[ "$api" =~ ^[0-9]+$ ]] || api=8080
+    [[ "$sftp" =~ ^[0-9]+$ ]] || sftp=2022
+    list="${SSH_PORT:-22},80,443,${api},${sftp}"
+    [[ -n "${EXCLUDE_PORTS:-}" ]] && list+=",${EXCLUDE_PORTS}"
+    printf '%s' "$list"
+}
+
+# ports_minus "8000:8092,25565" "8080,22" -> "8000:8079,8081:8092,25565"
+ports_minus() {
+    awk -v spec="$1" -v excl="$2" '
+        function mark(str, arr,    n, i, p, m, r, lo, hi, q) {
+            n = split(str, p, ",")
+            for (i = 1; i <= n; i++) {
+                if (p[i] == "") continue
+                m = split(p[i], r, ":"); lo = r[1] + 0; hi = (m > 1 ? r[2] + 0 : lo)
+                if (lo < 1) lo = 1; if (hi > 65535) hi = 65535
+                for (q = lo; q <= hi; q++) arr[q] = 1
+            }
+        }
+        BEGIN {
+            mark(spec, a); mark(excl, e); out = ""; start = 0
+            for (q = 1; q <= 65536; q++) {
+                ok = (q <= 65535 && (q in a) && !(q in e))
+                if (ok && !start) start = q
+                if (!ok && start) { end = q - 1; out = out (out == "" ? "" : ",") (start == end ? start : start ":" end); start = 0 }
+            }
+            print out
+        }'
+}
+
+# Divide una lista en grupos que caben en un multiport de iptables (15 entradas; un rango cuenta 2).
+ports_chunks() {
+    awk -v spec="$1" 'BEGIN {
+        n = split(spec, p, ","); w = 0; line = ""
+        for (i = 1; i <= n; i++) {
+            if (p[i] == "") continue
+            cw = (index(p[i], ":") ? 2 : 1)
+            if (w + cw > 15) { print line; line = ""; w = 0 }
+            line = line (line == "" ? "" : ",") p[i]; w += cw
+        }
+        if (line != "") print line
+    }'
 }
 
 # ── Reglas ────────────────────────────────────────────────────────────────────
@@ -239,25 +296,37 @@ apply_rules() {
         -m hashlimit --hashlimit-name vs_icmp --hashlimit-mode srcip "${HL_SMALL[@]}" \
         --hashlimit-above "${ICMP_RATE}/second" --hashlimit-burst 20 -j ANTIDDOS_D_ICMP
 
+    # ── Puertos protegidos: sin los reservados (Wings, SSH, web) y en grupos de 15 ──
+    local tcp_eff udp_eff c
+    tcp_eff="$(ports_minus "$TCP_PORTS" "$(reserved_ports)")"
+    udp_eff="$(ports_minus "$UDP_PORTS" "$(reserved_ports)")"
+    local -a TCPC=() UDPC=()
+    [[ -n "$tcp_eff" ]] && mapfile -t TCPC < <(ports_chunks "$tcp_eff")
+    [[ -n "$udp_eff" ]] && mapfile -t UDPC < <(ports_chunks "$udp_eff")
+
+    # Modo «bajo ataque»: limites mas estrictos SOLO para IPs desconocidas (que no tienen una
+    # sesion establecida reciente). Las conocidas conservan los limites normales.
+    local a_syn_rate=$(( SYN_RATE / 2 > 5 ? SYN_RATE / 2 : 5 )) a_syn_burst=$(( SYN_BURST / 2 > 10 ? SYN_BURST / 2 : 10 ))
+    local a_udp_rate=$(( UDP_RATE / 2 > 200 ? UDP_RATE / 2 : 200 )) a_udp_burst=$(( UDP_BURST / 2 > 400 ? UDP_BURST / 2 : 400 ))
+    local a_conn=$(( CONN_LIMIT / 2 > 10 ? CONN_LIMIT / 2 : 10 ))
+    local -a UNKNOWN=(-m set ! --match-set vs_trusted src)
+
     # Contadores del trafico externo hacia los puertos protegidos (lo de la lista
     # blanca ya salio con RETURN y no se cuenta).
-    if [[ -n "$TCP_PORTS" ]]; then
-        "${R[@]}" -p tcp -m multiport --dports "$TCP_PORTS" -j ANTIDDOS_CTCP
-        "${R[@]}" -p tcp --syn -m multiport --dports "$TCP_PORTS" -j ANTIDDOS_CSYN
-    fi
-    if [[ -n "$UDP_PORTS" ]]; then
-        "${R[@]}" -p udp -m multiport --dports "$UDP_PORTS" -j ANTIDDOS_CUDP
-    fi
+    for c in "${TCPC[@]}"; do
+        "${R[@]}" -p tcp -m multiport --dports "$c" -j ANTIDDOS_CTCP
+        "${R[@]}" -p tcp --syn -m multiport --dports "$c" -j ANTIDDOS_CSYN
+    done
+    for c in "${UDPC[@]}"; do
+        "${R[@]}" -p udp -m multiport --dports "$c" -j ANTIDDOS_CUDP
+    done
 
     # Amplificacion/reflexion UDP hacia los puertos protegidos (incluido el «query»
     # UDP de los servidores Java, que usa el mismo puerto que el juego).
     ipt -t raw -A ANTIDDOS_AMP -p udp -m multiport --sports "$AMP_SPORTS" -j ANTIDDOS_D_UDP
-    if [[ -n "$UDP_PORTS" ]]; then
-        "${R[@]}" -p udp -m multiport --dports "$UDP_PORTS" -j ANTIDDOS_AMP
-    fi
-    if [[ -n "$TCP_PORTS" ]]; then
-        "${R[@]}" -p udp -m multiport --dports "$TCP_PORTS" -j ANTIDDOS_AMP
-    fi
+    for c in "${UDPC[@]}" "${TCPC[@]}"; do
+        "${R[@]}" -p udp -m multiport --dports "$c" -j ANTIDDOS_AMP
+    done
 
     # Politica de bloqueo (BAN_MODE):
     #   monitor  -> NUNCA se bloquea una IP: solo se frena el exceso de paquetes.
@@ -269,29 +338,32 @@ apply_rules() {
     fi
 
     # Conexiones nuevas por IP hacia los puertos protegidos.
-    if [[ -n "$TCP_PORTS" ]]; then
+    for c in "${TCPC[@]}"; do
         if [[ "$BAN_MODE" != "monitor" ]]; then
-            "${R[@]}" -p tcp --syn -m multiport --dports "$TCP_PORTS" \
+            "${R[@]}" -p tcp --syn -m multiport --dports "$c" \
                 -m hashlimit --hashlimit-name vs_synban --hashlimit-mode srcip "${HL_BIG[@]}" \
                 --hashlimit-above "${ban_rate}/second" --hashlimit-burst "$ban_burst" \
                 -j VS_SYNFLOOD
         fi
         if [[ "$BAN_MODE" != "strict" ]]; then
-            "${R[@]}" -p tcp --syn -m multiport --dports "$TCP_PORTS" \
+            "${R[@]}" -p tcp --syn -m multiport --dports "$c" \
                 -m hashlimit --hashlimit-name vs_syn --hashlimit-mode srcip "${HL_BIG[@]}" \
                 --hashlimit-above "${SYN_RATE}/second" --hashlimit-burst "$SYN_BURST" \
                 -j ANTIDDOS_D_SLIM
         fi
-        # Modo «bajo ataque»: limite tambien por red /24. Frena las botnets que reparten
-        # el ataque entre muchas IPs del mismo operador (cada una por debajo del limite
-        # por IP). Solo frena, no bloquea: margen de 4 veces el limite por IP.
         if [[ "${ATTACK_MODE}" == "1" ]]; then
-            "${R[@]}" -p tcp --syn -m multiport --dports "$TCP_PORTS" \
+            # IPs desconocidas: limite mas estricto por IP y, ademas, por red /24 (botnets que
+            # reparten el ataque entre muchas IPs del mismo operador). Solo frena, no bloquea.
+            "${R[@]}" -p tcp --syn -m multiport --dports "$c" "${UNKNOWN[@]}" \
+                -m hashlimit --hashlimit-name vs_synA --hashlimit-mode srcip "${HL_BIG[@]}" \
+                --hashlimit-above "${a_syn_rate}/second" --hashlimit-burst "$a_syn_burst" \
+                -j ANTIDDOS_D_SLIM
+            "${R[@]}" -p tcp --syn -m multiport --dports "$c" "${UNKNOWN[@]}" \
                 -m hashlimit --hashlimit-name vs_syn24 --hashlimit-mode srcip --hashlimit-srcmask 24 "${HL_BIG[@]}" \
                 --hashlimit-above "$(( SYN_RATE * 4 ))/second" --hashlimit-burst "$(( SYN_BURST * 4 ))" \
                 -j ANTIDDOS_D_SLIM
         fi
-    fi
+    done
 
     # Fuerza bruta contra SSH.
     if [[ -n "$SSH_PORT" ]]; then
@@ -318,24 +390,46 @@ apply_rules() {
 
     # UDP flood (Bedrock/Geyser): solo se descarta; las IPs de origen de un
     # flood UDP suelen estar falsificadas y bloquearlas perjudicaria a terceros.
-    if [[ -n "$UDP_PORTS" ]]; then
-        "${R[@]}" -p udp -m multiport --dports "$UDP_PORTS" \
+    for c in "${UDPC[@]}"; do
+        "${R[@]}" -p udp -m multiport --dports "$c" \
             -m hashlimit --hashlimit-name vs_udp --hashlimit-mode srcip "${HL_BIG[@]}" \
             --hashlimit-above "${UDP_RATE}/second" --hashlimit-burst "$UDP_BURST" -j ANTIDDOS_D_UDP
-    fi
+        if [[ "${ATTACK_MODE}" == "1" ]]; then
+            "${R[@]}" -p udp -m multiport --dports "$c" "${UNKNOWN[@]}" \
+                -m hashlimit --hashlimit-name vs_udpA --hashlimit-mode srcip "${HL_BIG[@]}" \
+                --hashlimit-above "${a_udp_rate}/second" --hashlimit-burst "$a_udp_burst" -j ANTIDDOS_D_UDP
+        fi
+    done
 
     # Conexiones simultaneas por IP (conntrack ya esta resuelto en mangle).
-    if [[ -n "$TCP_PORTS" ]]; then
+    if (( ${#TCPC[@]} + ${#UDPC[@]} > 0 )); then
         ipt -t mangle -A ANTIDDOS_M -m set --match-set vs_white src -j RETURN
         ipt -t mangle -A ANTIDDOS_M -m set --match-set vs_white_feed src -j RETURN
+    fi
+    for c in "${TCPC[@]}"; do
+        # Jugadores reales: una IP con una sesion TCP ESTABLISHED hacia un puerto protegido se
+        # recuerda 6 h (vs_trusted). Un atacante que solo manda SYN/ACK sueltos nunca llega aqui.
+        # La regla solo actua si la IP aun no esta en el set y esta limitada (sin coste bajo carga).
+        ipt -t mangle -A ANTIDDOS_M -p tcp -m multiport --dports "$c" -m conntrack --ctstate ESTABLISHED \
+            -m set ! --match-set vs_trusted src -m limit --limit 500/second --limit-burst 1000 \
+            -j SET --add-set vs_trusted src --exist --timeout 21600
         # Paquetes TCP que no pertenecen a ninguna conexion (floods de ACK/RST/PSH):
         # con nf_conntrack_tcp_loose=0 (ver sysctl) conntrack los marca INVALID y no
         # llegan a ocupar la tabla de conexiones ni a Docker.
-        ipt -t mangle -A ANTIDDOS_M -p tcp -m multiport --dports "$TCP_PORTS" \
+        ipt -t mangle -A ANTIDDOS_M -p tcp -m multiport --dports "$c" \
             -m conntrack --ctstate INVALID -j ANTIDDOS_M_INV
-        ipt -t mangle -A ANTIDDOS_M -p tcp --syn -m multiport --dports "$TCP_PORTS" \
+        if [[ "${ATTACK_MODE}" == "1" ]]; then
+            ipt -t mangle -A ANTIDDOS_M -p tcp --syn -m multiport --dports "$c" "${UNKNOWN[@]}" \
+                -m connlimit --connlimit-above "$a_conn" --connlimit-mask 32 --connlimit-saddr -j DROP
+        fi
+        ipt -t mangle -A ANTIDDOS_M -p tcp --syn -m multiport --dports "$c" \
             -m connlimit --connlimit-above "$CONN_LIMIT" --connlimit-mask 32 --connlimit-saddr -j DROP
-    fi
+    done
+    for c in "${UDPC[@]}"; do
+        ipt -t mangle -A ANTIDDOS_M -p udp -m multiport --dports "$c" -m conntrack --ctstate ESTABLISHED \
+            -m set ! --match-set vs_trusted src -m limit --limit 500/second --limit-burst 1000 \
+            -j SET --add-set vs_trusted src --exist --timeout 21600
+    done
 
     ipt -t raw    -I PREROUTING 1 -j ANTIDDOS
     ipt -t mangle -I PREROUTING 1 -j ANTIDDOS_M
@@ -762,7 +856,7 @@ cmd_remove() {
     have iptables && remove_rules
     if have ipset; then
         local s
-        for s in vs_white vs_white_feed vs_feed vs_asn vs_ban vs_ban_ssh vs_ban_man vs_feed_tmp vs_white_feed_tmp vs_asn_tmp; do
+        for s in vs_white vs_white_feed vs_feed vs_asn vs_ban vs_ban_ssh vs_ban_man vs_trusted vs_feed_tmp vs_white_feed_tmp vs_asn_tmp; do
             ipset destroy "$s" 2>/dev/null || true
         done
     fi
@@ -785,6 +879,11 @@ cmd_status() {
     echo "  Modo ataque     : $([[ $ATTACK_MODE == 1 ]] && echo SÍ || echo no)"
     echo "  Política bloqueo: ${BAN_MODE} (monitor = nunca bloquea · balanced = solo floods claros · strict = al primer exceso)"
     echo "  Límites         : conn=${CONN_LIMIT}/IP  syn=${SYN_RATE}/s (ráfaga ${SYN_BURST})  udp=${UDP_RATE}/s  ban=${BAN_SECONDS}s"
+    if [[ "$ATTACK_MODE" == "1" ]]; then
+        echo "  Modo ataque     : límites más estrictos SOLO para IPs desconocidas; los jugadores ya conectados conservan los normales"
+    fi
+    echo "  Jugadores conocidos: $(count_set vs_trusted) IPs (sesión establecida reciente, exentas de los límites extra del modo ataque)"
+    echo "  TCP efectivos   : $(ports_minus "$TCP_PORTS" "$(reserved_ports)") (sin los reservados: $(reserved_ports))"
     echo "  Panel (sync)    : ${PANEL_URL:-no configurado}"
     if have ipset; then
         local s n
@@ -892,7 +991,7 @@ cmd_attack() {
 
 set_conf() {
     local key="$1" value="$2"
-    [[ "$key" =~ ^(TCP_PORTS|UDP_PORTS|WEB_PORTS|SSH_PORT|CONN_LIMIT|SYN_RATE|SYN_BURST|UDP_RATE|UDP_BURST|ICMP_RATE|BAN_SECONDS|ATTACK_MODE|SYSCTL|PANEL_URL|PANEL_DIR|API_KEY|EXTRA_WHITELIST|NET_IFACE|BAN_MODE)$ ]] \
+    [[ "$key" =~ ^(TCP_PORTS|UDP_PORTS|WEB_PORTS|SSH_PORT|CONN_LIMIT|SYN_RATE|SYN_BURST|UDP_RATE|UDP_BURST|ICMP_RATE|BAN_SECONDS|ATTACK_MODE|SYSCTL|PANEL_URL|PANEL_DIR|API_KEY|EXTRA_WHITELIST|NET_IFACE|BAN_MODE|EXCLUDE_PORTS)$ ]] \
         || fail "Clave desconocida: ${key}"
     [[ "$value" =~ ^[A-Za-z0-9:,./_\ -]*$ ]] || fail "Valor con caracteres no permitidos."
     mkdir -p "$(dirname "$CONF")"

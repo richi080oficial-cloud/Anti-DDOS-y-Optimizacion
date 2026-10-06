@@ -541,7 +541,7 @@ NODO (firewall anti-DDoS contra ataques a los servidores de Minecraft)
   node-uninstall        Quita el agente (conserva /etc/antiddos)
   node-status           Estado del firewall
   fw <acción>           apply | remove | status | top | sync | set CLAVE VALOR  (ver 'antiddos fw help')
-  attack-on             Modo "bajo ataque": límites mucho más estrictos
+  attack-on             Modo "bajo ataque": límites más estrictos solo para IPs desconocidas (los jugadores conectados no se ven afectados)
   attack-off            Vuelve a los límites normales
 
 BLOQUEOS (firewall local y/o panel, según lo que haya en esta máquina)
