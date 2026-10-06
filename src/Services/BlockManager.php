@@ -136,7 +136,7 @@ class BlockManager
         $this->remember($ip, $block->expires_at ? $block->expires_at->getTimestamp() : 0);
 
         ShieldEvent::record(
-            $source === 'auto' ? 'auto-ban' : 'ban',
+            in_array($source, ['auto', 'intel'], true) ? 'auto-ban' : 'ban',
             sprintf('IP %s bloqueada %s%s', $ip, $minutes === null ? 'permanentemente' : "{$minutes} min", $reason ? " ({$reason})" : ''),
             $ip
         );

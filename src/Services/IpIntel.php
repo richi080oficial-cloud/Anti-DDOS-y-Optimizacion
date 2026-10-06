@@ -96,7 +96,7 @@ class IpIntel
      *
      * @return array<string, mixed>
      */
-    public function lookup(string $ip, bool $force = false): array
+    public function lookup(string $ip, bool $force = false, bool $autoBlock = true): array
     {
         if (!$force && is_array($cached = Cache::get($this->key($ip)))) {
             return $cached;
@@ -114,7 +114,24 @@ class IpIntel
 
         Cache::put($this->key($ip), $intel, $geo === null && $matches === [] && $abuse === null ? self::TTL_FAIL : self::TTL);
 
+        // Bloqueo automatico (si esta activado): al instante, sin esperar a la pasada del minuto.
+        if ($autoBlock && ($intel['verdict'] ?? '') === 'malicious') {
+            try {
+                app(AutoBlocker::class)->maybeBlock($ip, $intel);
+            } catch (\Throwable $e) {
+                // Un fallo al bloquear nunca debe romper la consulta.
+            }
+        }
+
         return $intel;
+    }
+
+    /** Lo que haya en cache para la IP (sin consultar nada), o null. */
+    public function cached(string $ip): ?array
+    {
+        $cached = Cache::get($this->key($ip));
+
+        return is_array($cached) ? $cached : null;
     }
 
     /**

@@ -10,6 +10,7 @@ use Pterodactyl\Extensions\AntiDDoS\Models\ShieldEvent;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldNetBlock;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldSetting;
 use Pterodactyl\Extensions\AntiDDoS\Services\AgentRegistry;
+use Pterodactyl\Extensions\AntiDDoS\Services\AutoBlocker;
 use Pterodactyl\Extensions\AntiDDoS\Services\BlockManager;
 use Pterodactyl\Extensions\AntiDDoS\Services\IpIntel;
 use Pterodactyl\Extensions\AntiDDoS\Services\IpMatcher;
@@ -21,7 +22,7 @@ use Pterodactyl\Extensions\AntiDDoS\Services\SafeIps;
 class ShieldCommand extends Command
 {
     protected $signature = 'antiddos:manage
-                            {action=info : info | ip | refresh-lists | apikey | purge | prune | feed | ban | unban | bans | whitelist | asn | country | refresh-nets | compact-metrics | heartbeat | sync}
+                            {action=info : info | ip | refresh-lists | auto-block | apikey | purge | prune | feed | ban | unban | bans | whitelist | asn | country | refresh-nets | compact-metrics | heartbeat | sync}
                             {args?* : Argumentos de la accion (IP, add|del|list, block|unblock|list AS199585)}
                             {--key= : Clave concreta a usar con la accion apikey}
                             {--if-missing : Con apikey, no hace nada si ya existe una clave}
@@ -60,6 +61,7 @@ class ShieldCommand extends Command
             'prune' => $this->prune($blocks),
             'ip' => $this->ip($args),
             'refresh-lists' => $this->refreshLists(),
+            'auto-block' => $this->autoBlock(),
             'feed' => $this->feed($blocks),
             'heartbeat' => $this->heartbeat(),
             'sync' => $this->sync($blocks),
@@ -170,7 +172,7 @@ class ShieldCommand extends Command
             $this->refreshLists();
         }
 
-        $intel = app(IpIntel::class)->lookup($ip, true);
+        $intel = app(IpIntel::class)->lookup($ip, true, false);
         $why = app(SafeIps::class)->protectedReason($ip);
 
         $this->table(['Campo', 'Valor'], [
@@ -187,6 +189,27 @@ class ShieldCommand extends Command
 
         foreach ((array) ($intel['reasons'] ?? []) as $reason) {
             $this->line(' · ' . $reason);
+        }
+
+        return self::SUCCESS;
+    }
+
+    /** Una pasada del bloqueo automatico de IPs maliciosas (la lanza el cron cada minuto). */
+    protected function autoBlock(): int
+    {
+        $auto = app(AutoBlocker::class);
+
+        if (!$auto->enabled()) {
+            $this->line('El bloqueo automático de IPs maliciosas está desactivado (Protección → Origen y reputación de IPs).');
+
+            return self::SUCCESS;
+        }
+
+        $r = $auto->run();
+        $this->line(sprintf('IPs valoradas: %d · consultas nuevas: %d · bloqueadas: %d (%s)', $r['checked'], $r['lookups'], count($r['blocked']), $auto->durationLabel()));
+
+        foreach ($r['blocked'] as $ip) {
+            $this->line("  <comment>⛔</comment> {$ip}");
         }
 
         return self::SUCCESS;

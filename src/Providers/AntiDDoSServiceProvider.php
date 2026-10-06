@@ -62,6 +62,10 @@ class AntiDDoSServiceProvider extends ServiceProvider
         $this->callAfterResolving(Schedule::class, function (Schedule $schedule) {
             $schedule->command('antiddos:manage prune')->dailyAt('04:30')->withoutOverlapping();
             $schedule->command('antiddos:manage refresh-lists')->dailyAt('05:15')->withoutOverlapping();
+            // Bloqueo automatico de IPs maliciosas: cada minuto, en segundo plano (no retrasa las
+            // tareas de Pterodactyl) y solo si el admin lo ha activado (no arranca nada si esta apagado).
+            $schedule->command('antiddos:manage auto-block')->everyMinute()->runInBackground()->withoutOverlapping(5)
+                ->when(fn () => app(\Pterodactyl\Extensions\AntiDDoS\Services\AutoBlocker::class)->enabled());
             // Rangos nuevos que anuncien los operadores/paises bloqueados.
             $schedule->command('antiddos:manage refresh-nets')->dailyAt('05:40')->withoutOverlapping();
             // Historial de la grafica: 1 muestra cada 5 min pasadas 26 h y nada de mas de 8 dias.

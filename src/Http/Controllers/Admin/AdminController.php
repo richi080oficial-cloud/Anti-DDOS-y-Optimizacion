@@ -14,6 +14,7 @@ use Pterodactyl\Extensions\AntiDDoS\Models\ShieldAgent;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldBlock;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldEvent;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldSetting;
+use Pterodactyl\Extensions\AntiDDoS\Services\AutoBlocker;
 use Pterodactyl\Extensions\AntiDDoS\Services\BlockManager;
 use Pterodactyl\Extensions\AntiDDoS\Services\HealthCheck;
 use Pterodactyl\Extensions\AntiDDoS\Services\IpIntel;
@@ -626,9 +627,16 @@ class AdminController extends Controller
     /** Consulta de origen y reputacion: activar/desactivar y clave opcional de AbuseIPDB. */
     public function updateIntel(Request $request): RedirectResponse
     {
-        $request->validate(['abuseipdb_key' => 'nullable|string|max:200']);
+        $data = $request->validate([
+            'abuseipdb_key' => 'nullable|string|max:200',
+            'auto_block_duration' => 'nullable|in:24h,7d,forever',
+        ]);
 
-        ShieldSetting::write(['intel_enabled' => $request->boolean('intel_enabled')]);
+        ShieldSetting::write([
+            'intel_enabled' => $request->boolean('intel_enabled'),
+            'auto_block_malicious' => $request->boolean('auto_block_malicious'),
+            'auto_block_duration' => $data['auto_block_duration'] ?? (string) ShieldSetting::read('auto_block_duration', '24h'),
+        ]);
 
         if ($request->boolean('abuseipdb_clear')) {
             $this->intel->setAbuseKey(null);
@@ -636,7 +644,7 @@ class AdminController extends Controller
             $this->intel->setAbuseKey(trim((string) $request->input('abuseipdb_key')));
         }
 
-        return $this->tab('shield')->with('antiddos:success', 'Configuración de origen y reputación guardada.');
+        return $this->tab('shield')->with('antiddos:success', 'Configuración de origen y reputación guardada.' . ($request->boolean('auto_block_malicious') && $request->boolean('intel_enabled') ? ' Bloqueo automático de IPs maliciosas ACTIVADO (' . app(AutoBlocker::class)->durationLabel() . ').' : ''));
     }
 
     /** Descarga ya las listas publicas de reputacion. */

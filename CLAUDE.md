@@ -1,6 +1,6 @@
 # Anti-DDoS y Optimización para Pterodactyl — MEMORIA DEL PROYECTO
 
-> **Lee este archivo entero antes de tocar nada.** Resume el proyecto, cómo trabaja el usuario, la arquitectura, las trampas ya conocidas y todo lo hecho en la sesión que lo creó. Versión actual del código: **1.9.2** (`VERSION`). Rama de trabajo: **`main`** (única).
+> **Lee este archivo entero antes de tocar nada.** Resume el proyecto, cómo trabaja el usuario, la arquitectura, las trampas ya conocidas y todo lo hecho en la sesión que lo creó. Versión actual del código: **1.10.0** (`VERSION`). Rama de trabajo: **`main`** (única).
 
 ---
 
@@ -75,6 +75,7 @@ src/                           ← se copia a <panel>/app/Extensions/AntiDDoS  (
   Services/LiveTraffic.php      modo «en vivo» (1 muestra/s, 5 min) desde /var/lib/antiddos/live.json o Redis
   Services/MetricsService.php   historial (BD) 1h/6h/24h/7d con el mismo motor
   Services/IpIntel.php          origen + reputación + veredicto de una IP (caché, en segundo plano)
+  Services/AutoBlocker.php      bloqueo automático de IPs «maliciosas» (opcional; 24 h / 7 d / para siempre; cron cada minuto + al instante)
   Services/ReputationLists.php  listas públicas de atacantes (descarga diaria, búsqueda binaria IPv4)
   Services/NetworkBlocks.php    bloqueo de OPERADORES (ASN) y PAÍSES: rangos de RIPEstat (respaldo RADB/ipdeny), agregados (máx. /8), feed «A», índice por /8 para ShieldGuard, regla de Cloudflare
   Models/ShieldNetBlock.php     tabla antiddos_net_blocks (kind asn|country, value, prefixes JSON, expires_at)
@@ -125,6 +126,7 @@ node-install [--tcp= --udp= --web= --ssh= --panel-url= --key= --panel-dir=] | no
 fw status|apply|remove|top|sync|set CLAVE VALOR|white-add|white-del|ban|unban|bans     attack-on | attack-off
 ban IP [min] | unban IP | bans | whitelist add|del|list
 ip 203.0.113.7                análisis completo (origen, reputación, ¿se puede bloquear?)  (enlazado en el gestor desde 1.9.0)
+auto-block                    una pasada del bloqueo automático (el cron la lanza cada minuto si está activado)
 asn block|unblock|list|refresh AS199585 [--hours= --reason= --force]   country block|unblock|list PL
 nginx-on|nginx-off|nginx-status   autoupdate-on|autoupdate-off
 ```
@@ -201,6 +203,7 @@ sudo antiddos status ; systemctl is-active antiddos-live
 | 1.9.0 | Petición urgente: DDoS desde **AS199585** (TELNET Ropczyce, Polonia, ~2.300 IPs, «Operador / residencial») que cambia de IP. **Bloqueo de operadores (ASN) y países** desde el panel (cuadro rápido «Bloquear operador (ASN)» en la cabecera, visible en todas las pestañas; pestaña propia «Operadores (ASN)» = `#asn`; botón rojo «🚫 Bloquear ASxxxx» en Tráfico), CLI `asn`/`country`, feed `A`, set `vs_asn`, 403 en el panel, regla para Cloudflare WAF. **Firewall endurecido** para floods grandes (el usuario habló de «solicitudes de hasta 107 M»): tablas hashlimit grandes, amplificación UDP, TCP INVALID/ACK floods, /24 en modo ataque, sysctl, sync con `ipset restore`. Arreglado: `antiddos ip` no estaba enlazado en el gestor; `extension.json` estaba en 1.1.0. |
 | 1.9.1 | **Optimización de consumo** (el usuario dijo que «Pterodactyl entero gasta 4.7 G»). Panel: `BlockManager::remaining` usa una clave de caché por IP (`antiddos:blk:ip:*` + `antiddos:blk:ready`, un `Cache::many` por petición) en vez del mapa entero; `MetricsService` con `toBase()->select()->cursor()` + caché 10/60 s; tablas top/fw_bans cacheadas 3 s; `ReputationLists` con resumen `antiddos:rep:meta:*` y memo por proceso. Nodo: acción artisan **`sync`** (latido + feed en un arranque de PHP); `sync_feed` se salta si md5(agent.conf + feed) no cambió (`/run/antiddos/feed.sum`, se borra en `apply`/`remove`); `cmd_watch` con muestras en array de bash, `read_net_var`/`now_ms_var` sin procesos, espera con `read -t` sobre una tubería, bloqueos contados cada 5 s con `ipset -t`; `read_counters` con un solo awk. |
 | 1.9.2 | «¿La gráfica gasta mucha base de datos?»: `MetricsService::compact()` (artisan `compact-metrics`, cada hora al minuto 17): todo a resolución completa las últimas 26 h (`FULL_HOURS`), antes 1 muestra por tramo de 5 min (`THIN_EVERY`) por host, nada de más de 8 días (`KEEP_DAYS`, antes 14); la vista 7d usa `GAP_THINNED`=420 para no pintar huecos falsos. Recuerda hasta dónde aclaró (`antiddos:metrics:thinned`). `AgentRegistry::sample` ya no consulta la última fila: `Cache::add('antiddos:metric:last:<host>', 1, 25)`. Simulado con el motor real: 57.619 → 10.231 filas (2 nodos, 10 días), 24 h idéntica, 7 d 0,00 % de diferencia. |
+| 1.10.0 | **Bloqueo automático de IPs maliciosas** (petición: «cuando determine la IP como maliciosa que directamente la bloquee» + «para siempre o solo 24 h»). `AutoBlocker` (apagado por defecto; ajustes `auto_block_malicious` y `auto_block_duration` = `24h`·`7d`·`forever`): `IpIntel::lookup` lo dispara al instante con veredicto `malicious` y el scheduler lanza `antiddos:manage auto-block` cada minuto (`runInBackground`, `when(enabled)` para no arrancar nada si está apagado; máx. 6 consultas nuevas y 40 s por pasada) sobre las `top_ips` de los agentes. Bloquea con `source='intel'` (etiqueta «Reputación») vía `BlockManager::block`, que sigue pasando por `SafeIps`. Solo `malicious` (listas de atacantes o AbuseIPDB ≥ 75); `suspicious` nunca. `antiddos ip` no bloquea (3.er parámetro `$autoBlock=false`). |
 
 Decisiones del usuario a recordar: quitar la optimización; una sola rama; el nombre se queda; quería ver **por qué** se bloquea cada cosa y evitar bloqueos sin sentido; quiere datos **precisos y veraces** en la gráfica.
 

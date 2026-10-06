@@ -57,6 +57,11 @@ return [
 
         // Origen y reputacion de IPs (consulta a servicios publicos; solo se envia la IP).
         'intel_enabled' => true,
+
+        // Bloqueo automatico de las IPs con veredicto «maliciosa» (apagado por defecto).
+        // Duracion: 24h | 7d | forever.
+        'auto_block_malicious' => false,
+        'auto_block_duration' => '24h',
     ],
 
     // Rutas que NUNCA se cuentan ni se bloquean (patrones de Request::is()).

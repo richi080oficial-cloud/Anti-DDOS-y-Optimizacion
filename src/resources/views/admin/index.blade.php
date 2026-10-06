@@ -363,11 +363,24 @@
                         @csrf
                         @method('PATCH')
                         <div class="card-h"><h3>Origen y reputación de IPs</h3>
-                            <span class="pill {{ $settings['intel_enabled'] ? 'ok' : 'warn' }}">{{ $settings['intel_enabled'] ? 'Activado' : 'Desactivado' }}</span></div>
+                            <span class="pill {{ $settings['intel_enabled'] ? 'ok' : 'warn' }}">{{ $settings['intel_enabled'] ? 'Activado' : 'Desactivado' }}</span>
+                            @if ($settings['intel_enabled'] && $settings['auto_block_malicious'])<span class="pill error">Auto-bloqueo: {{ ['24h' => '24 h', '7d' => '7 días', 'forever' => 'para siempre'][$settings['auto_block_duration']] ?? '24 h' }}</span>@endif</div>
                         <div class="card-b">
                             <label class="check"><input type="checkbox" name="intel_enabled" value="1" {{ $settings['intel_enabled'] ? 'checked' : '' }}>
                                 <span>Consultar el origen y la reputación de las IPs
                                     <small>País, ciudad, proveedor y ASN (ipwho.is / ipapi.co) y listas públicas de atacantes (Blocklist.de, Spamhaus DROP, FireHOL Level 1, CINS Army, nodos Tor). Solo se envía la IP, nunca datos de jugadores. Si lo desactivas no se consulta nada.</small></span></label>
+                            <div class="f" style="margin-top:12px; padding:12px 14px; border:1px solid var(--line); border-radius:6px; border-left:4px solid {{ $settings['auto_block_malicious'] ? 'var(--err)' : 'var(--line)' }};">
+                                <label class="check" style="margin-top:0;"><input type="checkbox" name="auto_block_malicious" value="1" {{ $settings['auto_block_malicious'] ? 'checked' : '' }}>
+                                    <span><b>Bloquear automáticamente las IPs maliciosas</b>
+                                        <small>Cuando una IP con conexiones a tus puertos recibe el veredicto «Maliciosa» (aparece en listas públicas de atacantes o AbuseIPDB ≥ 75 %), se bloquea sola en el panel y en todos los nodos, sin esperar a que lo hagas tú. Las «Sospechosas» (Tor, servidores/VPN) <b>no</b> se bloquean solas. Requiere la consulta de reputación activada y el cron de Pterodactyl.</small></span></label>
+                                <label for="auto_block_duration" style="margin-top:10px; display:block; font-weight:600;">Duración del bloqueo automático</label>
+                                <select class="form-control" id="auto_block_duration" name="auto_block_duration" style="max-width:280px;">
+                                    <option value="24h" {{ $settings['auto_block_duration'] === '24h' ? 'selected' : '' }}>24 horas (recomendado)</option>
+                                    <option value="7d" {{ $settings['auto_block_duration'] === '7d' ? 'selected' : '' }}>7 días</option>
+                                    <option value="forever" {{ $settings['auto_block_duration'] === 'forever' ? 'selected' : '' }}>Para siempre</option>
+                                </select>
+                                <small class="muted" style="display:block; margin-top:4px;">Con 24 h, si la IP sigue siendo maliciosa cuando caduque, se vuelve a bloquear sola. «Para siempre» deja la IP bloqueada hasta que la desbloquees tú (pestaña Bloqueos). Nunca se bloquean tus nodos, el panel, Cloudflare, la lista blanca ni tu IP.</small>
+                            </div>
                             <div class="f" style="margin-top:12px;">
                                 <label for="abuseipdb_key">Clave de AbuseIPDB (opcional)</label>
                                 <input class="form-control" type="password" id="abuseipdb_key" name="abuseipdb_key" autocomplete="off" placeholder="{{ $abuseKeySet ? '•••••••• guardada (escribe otra para cambiarla)' : 'Pega aquí tu clave gratuita' }}">
@@ -506,7 +519,7 @@
                 </div>
                 <div class="card-f small muted">
                     «Normal» = sin listados en bases de atacantes y red de operador/residencial (parece un jugador): <b>no la bloquees</b>.
-                    «Sospechosa» = servidor/VPN/Tor o abuso moderado. «Maliciosa» = aparece en listas públicas de atacantes: bloquearla es seguro.
+                    «Sospechosa» = servidor/VPN/Tor o abuso moderado. «Maliciosa» = aparece en listas públicas de atacantes: bloquearla es seguro{{ $settings['intel_enabled'] && $settings['auto_block_malicious'] ? ' (y el bloqueo automático está activado: se bloquea sola)' : ' (puedes activar el bloqueo automático en Protección)' }}.
                     Las IPs de tus nodos, del panel, de Cloudflare, la lista blanca y la tuya <b>nunca se pueden bloquear</b>.
                 </div>
             </div>
@@ -737,7 +750,7 @@
                                 @forelse ($blocks as $block)
                                     <tr>
                                         <td><code>{{ $block->ip }}</code></td>
-                                        <td>{{ ['auto' => 'Escudo', 'manual' => 'Manual'][$block->source] ?? $block->source }}</td>
+                                        <td>{{ ['auto' => 'Escudo', 'manual' => 'Manual', 'intel' => 'Reputación'][$block->source] ?? $block->source }}</td>
                                         <td>{{ $block->expires_at ? $block->expires_at->diffForHumans() : 'permanente' }}</td>
                                         <td>{{ $block->strikes }}</td>
                                         <td>{{ \Illuminate\Support\Str::limit((string) $block->reason, 60) }}</td>
