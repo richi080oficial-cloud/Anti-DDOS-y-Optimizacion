@@ -200,7 +200,7 @@ class BlockManager
         ShieldEvent::query()->where('created_at', '<', Carbon::now()->subDays($days))->delete();
 
         try {
-            ShieldMetric::query()->where('recorded_at', '<', Carbon::now()->subDays(min($days, 14)))->delete();
+            ShieldMetric::query()->where('recorded_at', '<', Carbon::now()->subDays(min($days, MetricsService::KEEP_DAYS)))->delete();
         } catch (\Throwable $e) {
             // Tabla de metricas aun sin migrar.
         }

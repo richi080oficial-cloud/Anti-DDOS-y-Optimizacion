@@ -24,6 +24,21 @@ class MetricsService
     /** Segundos entre muestras a partir de los cuales el tramo se considera un hueco. */
     public const GAP = 150.0;
 
+    /**
+     * Hueco en la vista de 7 dias: ahi entran muestras ya aclaradas (una cada 5 min),
+     * asi que la separacion normal es de ~300 s y no debe pintarse como hueco.
+     */
+    public const GAP_THINNED = 420.0;
+
+    /** Horas que se guardan con todas las muestras (~1 cada 30 s): cubren la vista de 24 h. */
+    public const FULL_HOURS = 26;
+
+    /** De ahi para atras se conserva una muestra cada este numero de segundos. */
+    public const THIN_EVERY = 300;
+
+    /** Dias que se guardan (la vista mas larga es de 7). */
+    public const KEEP_DAYS = 8;
+
     /** Segundos sin muestras tras los cuales los datos se consideran viejos. */
     public const STALE = 120.0;
 
@@ -72,7 +87,7 @@ class MetricsService
         // Eloquent (7 dias son ~24.000 filas por nodo; como modelos ocupaban >100 MB).
         $rows = ShieldMetric::query()->toBase()
             ->select(array_merge(['host', 'recorded_at', 'bans'], array_keys(self::COLUMNS)))
-            ->where('recorded_at', '>=', Carbon::createFromTimestamp((int) ($from - self::GAP)))
+            ->where('recorded_at', '>=', Carbon::createFromTimestamp((int) ($from - self::GAP_THINNED)))
             ->when($host !== null && $host !== '', fn ($q) => $q->where('host', $host))
             ->orderBy('host')
             ->orderBy('recorded_at')
@@ -90,7 +105,8 @@ class MetricsService
             $sources[$row->host][] = $sample;
         }
 
-        $r = $this->engine->build($sources, $start, $count, $bucket, self::GAP, $now, $view, self::STALE);
+        $gap = $range === '7d' ? self::GAP_THINNED : self::GAP;
+        $r = $this->engine->build($sources, $start, $count, $bucket, $gap, $now, $view, self::STALE);
 
         return [
             'range' => $range,
@@ -107,5 +123,56 @@ class MetricsService
             'stale' => $r['last'] === null || ($now - $r['last']) > self::STALE,
             'generated_at' => round($now, 3),
         ];
+    }
+
+    /**
+     * Aclara el historial: las muestras de hace mas de FULL_HOURS se quedan en una
+     * cada THIN_EVERY segundos por nodo (la primera de cada tramo) y se borra lo
+     * anterior a KEEP_DAYS. La vista de 7 dias usa puntos de 1 h, asi que no pierde
+     * nada visible; la tabla pasa de ~40.000 filas por nodo a ~6.000.
+     *
+     * Solo revisa lo que no se habia aclarado ya (se recuerda hasta donde llego).
+     *
+     * @return int filas borradas
+     */
+    public function compact(): int
+    {
+        $until = time() - self::FULL_HOURS * 3600;
+        $done = (int) Cache::get('antiddos:metrics:thinned', 0);
+        // Se empieza un tramo antes de lo ya aclarado para no partir un tramo de 5 min.
+        $from = $done > 0 ? $done - self::THIN_EVERY : $until - (self::KEEP_DAYS + 7) * 86400;
+
+        $deleted = ShieldMetric::query()
+            ->where('recorded_at', '<', Carbon::createFromTimestamp(time() - self::KEEP_DAYS * 86400))
+            ->delete();
+
+        $last = [];
+        $ids = [];
+
+        $rows = ShieldMetric::query()->toBase()
+            ->select(['id', 'host', 'recorded_at'])
+            ->where('recorded_at', '>=', Carbon::createFromTimestamp($from))
+            ->where('recorded_at', '<', Carbon::createFromTimestamp($until))
+            ->orderBy('host')
+            ->orderBy('recorded_at')
+            ->cursor();
+
+        foreach ($rows as $row) {
+            $slot = intdiv((int) strtotime((string) $row->recorded_at), self::THIN_EVERY);
+
+            if (($last[$row->host] ?? null) === $slot) {
+                $ids[] = (int) $row->id;
+            } else {
+                $last[$row->host] = $slot;
+            }
+        }
+
+        foreach (array_chunk($ids, 1000) as $chunk) {
+            $deleted += ShieldMetric::query()->whereIn('id', $chunk)->delete();
+        }
+
+        Cache::forever('antiddos:metrics:thinned', $until);
+
+        return $deleted;
     }
 }

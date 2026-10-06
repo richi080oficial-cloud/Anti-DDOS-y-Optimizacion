@@ -13,6 +13,7 @@ use Pterodactyl\Extensions\AntiDDoS\Services\AgentRegistry;
 use Pterodactyl\Extensions\AntiDDoS\Services\BlockManager;
 use Pterodactyl\Extensions\AntiDDoS\Services\IpIntel;
 use Pterodactyl\Extensions\AntiDDoS\Services\IpMatcher;
+use Pterodactyl\Extensions\AntiDDoS\Services\MetricsService;
 use Pterodactyl\Extensions\AntiDDoS\Services\NetworkBlocks;
 use Pterodactyl\Extensions\AntiDDoS\Services\ReputationLists;
 use Pterodactyl\Extensions\AntiDDoS\Services\SafeIps;
@@ -20,7 +21,7 @@ use Pterodactyl\Extensions\AntiDDoS\Services\SafeIps;
 class ShieldCommand extends Command
 {
     protected $signature = 'antiddos:manage
-                            {action=info : info | ip | refresh-lists | apikey | purge | prune | feed | ban | unban | bans | whitelist | asn | country | refresh-nets | heartbeat | sync}
+                            {action=info : info | ip | refresh-lists | apikey | purge | prune | feed | ban | unban | bans | whitelist | asn | country | refresh-nets | compact-metrics | heartbeat | sync}
                             {args?* : Argumentos de la accion (IP, add|del|list, block|unblock|list AS199585)}
                             {--key= : Clave concreta a usar con la accion apikey}
                             {--if-missing : Con apikey, no hace nada si ya existe una clave}
@@ -69,6 +70,7 @@ class ShieldCommand extends Command
             'asn', 'operador' => $this->net('asn', $args),
             'country', 'pais' => $this->net('country', $args),
             'refresh-nets' => $this->refreshNets(),
+            'compact-metrics' => $this->compactMetrics(),
             default => $this->unknown($action),
         };
     }
@@ -404,6 +406,22 @@ class ShieldCommand extends Command
             $block->label(), $hours === null ? 'permanentemente' : "{$hours} h", $block->prefix_count, number_format($block->ip_count, 0, ',', '.')
         ));
         $this->line('Rangos: ' . Str::limit(implode(', ', (array) $block->prefixes), 400));
+
+        return self::SUCCESS;
+    }
+
+    /** Aclara el historial de la grafica (lo ejecuta el scheduler cada hora). */
+    protected function compactMetrics(): int
+    {
+        try {
+            $n = app(MetricsService::class)->compact();
+        } catch (\Throwable $e) {
+            $this->error('No se pudo aclarar el historial: ' . $e->getMessage());
+
+            return self::FAILURE;
+        }
+
+        $this->line("Historial de la gráfica aclarado: {$n} muestras antiguas borradas.");
 
         return self::SUCCESS;
     }

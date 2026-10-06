@@ -3,6 +3,7 @@
 namespace Pterodactyl\Extensions\AntiDDoS\Services;
 
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldAgent;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldMetric;
 
@@ -92,9 +93,9 @@ class AgentRegistry
     protected function sample(string $host, array $payload): void
     {
         try {
-            $last = ShieldMetric::query()->where('host', $host)->orderByDesc('id')->first(['recorded_at']);
-
-            if ($last !== null && time() - $last->recorded_at->getTimestamp() < 25) {
+            // Como mucho una muestra cada 25 s por agente. Se controla con la cache
+            // (SET NX en Redis) en vez de consultar la ultima fila en cada latido.
+            if (!Cache::add('antiddos:metric:last:' . $host, 1, 25)) {
                 return;
             }
 

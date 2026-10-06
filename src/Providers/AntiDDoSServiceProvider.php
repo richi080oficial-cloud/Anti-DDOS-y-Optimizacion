@@ -64,6 +64,8 @@ class AntiDDoSServiceProvider extends ServiceProvider
             $schedule->command('antiddos:manage refresh-lists')->dailyAt('05:15')->withoutOverlapping();
             // Rangos nuevos que anuncien los operadores/paises bloqueados.
             $schedule->command('antiddos:manage refresh-nets')->dailyAt('05:40')->withoutOverlapping();
+            // Historial de la grafica: 1 muestra cada 5 min pasadas 26 h y nada de mas de 8 dias.
+            $schedule->command('antiddos:manage compact-metrics')->hourlyAt(17)->withoutOverlapping();
         });
     }
 }
