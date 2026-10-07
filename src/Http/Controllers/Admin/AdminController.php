@@ -297,6 +297,14 @@ class AdminController extends Controller
             }
         }
 
+        // Las IPs de tus propios nodos y del panel no son visitantes (p. ej. Wings hablando con los
+        // servidores por la IP publica): se omiten de la lista.
+        foreach (array_keys($totals) as $ip) {
+            if ($this->safe->isInfrastructure((string) $ip)) {
+                unset($totals[$ip]);
+            }
+        }
+
         arsort($totals);
         $blocked = $this->blocks->map();
         $out = [];
@@ -645,6 +653,22 @@ class AdminController extends Controller
         }
 
         return $this->tab('shield')->with('antiddos:success', 'Configuración de origen y reputación guardada.' . ($request->boolean('auto_block_malicious') && $request->boolean('intel_enabled') ? ' Bloqueo automático de IPs maliciosas ACTIVADO (' . app(AutoBlocker::class)->durationLabel() . ').' : ''));
+    }
+
+    /** Repite la consulta de origen y reputacion de una IP. */
+    public function recheckIp(Request $request): RedirectResponse
+    {
+        $data = $request->validate(['ip' => 'required|ip']);
+
+        @set_time_limit(60);
+        $intel = $this->intel->recheck($data['ip']);
+
+        return $this->tab('traffic')->with(
+            ($intel['status'] ?? '') === 'partial' ? 'antiddos:error' : 'antiddos:success',
+            ($intel['status'] ?? '') === 'partial'
+                ? "No se pudo consultar el origen de {$data['ip']}: los servicios no respondieron. Se reintentará solo en unos minutos."
+                : "Consulta de {$data['ip']} repetida: " . ($intel['verdict_text'] ?? 'listo') . '.'
+        );
     }
 
     /** Descarga ya las listas publicas de reputacion. */

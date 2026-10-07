@@ -38,6 +38,7 @@ Route::middleware(['web', 'auth', AdminAuthenticate::class])
         Route::patch('/intel', [AdminController::class, 'updateIntel'])->name('intel.update');
         Route::post('/intel/refresh', [AdminController::class, 'refreshLists'])->middleware('throttle:6,1')->name('intel.refresh');
         Route::patch('/policy', [AdminController::class, 'updatePolicy'])->name('policy.update');
+        Route::post('/intel/recheck', [AdminController::class, 'recheckIp'])->middleware('throttle:20,1')->name('intel.recheck');
         Route::post('/whitelist', [AdminController::class, 'whitelistIp'])->middleware('throttle:30,1')->name('whitelist.add');
 
         // Graficas de trafico (JSON para el dibujado en el navegador).

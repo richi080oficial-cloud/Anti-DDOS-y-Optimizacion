@@ -518,7 +518,7 @@
                     </table>
                 </div>
                 <div class="card-f small muted">
-                    «Normal» = sin listados en bases de atacantes y red de operador/residencial (parece un jugador): <b>no la bloquees</b>.
+                    Se omiten las IPs de tus propios nodos y del panel. «Normal» = sin listados en bases de atacantes y red de operador/residencial (parece un jugador): <b>no la bloquees</b>.
                     «Sospechosa» = servidor/VPN/Tor o abuso moderado. «Maliciosa» = aparece en listas públicas de atacantes: bloquearla es seguro{{ $settings['intel_enabled'] && $settings['auto_block_malicious'] ? ' (y el bloqueo automático está activado: se bloquea sola)' : ' (puedes activar el bloqueo automático en Protección)' }}.
                     Las IPs de tus nodos, del panel, de Cloudflare, la lista blanca y la tuya <b>nunca se pueden bloquear</b>.
                 </div>
@@ -903,6 +903,7 @@
                 var URL_BLOCK = @json(route('admin.extensions.antiddos.blocks.store'));
                 var CSRF = @json(csrf_token());
                 var URL_WL = @json(route('admin.extensions.antiddos.whitelist.add'));
+                var URL_RECHECK = @json(route('admin.extensions.antiddos.intel.recheck'));
                 var URL_NET = @json(route('admin.extensions.antiddos.networks.store'));
 
                 var PS = { ps: ['por segundo', 1], pm: ['por minuto', 60] };
@@ -1010,6 +1011,7 @@
                     if (it.status === 'pending') { td.appendChild(el('span', 'muted', 'Consultando…')); return td; }
                     if (it.status === 'disabled') { td.appendChild(el('span', 'muted', 'Consulta desactivada')); return td; }
                     if (it.status === 'internal') { td.appendChild(el('span', 'muted', 'Red interna')); return td; }
+                    if (it.status === 'partial') { var sp = el('span', 'muted', 'Origen no disponible'); sp.title = 'Los servicios de consulta no respondieron; se reintenta solo cada pocos minutos.'; td.appendChild(sp); return td; }
                     var place = [it.city, it.country].filter(Boolean).join(', ');
                     td.appendChild(document.createTextNode((it.flag ? it.flag + ' ' : '') + (place || 'Origen desconocido')));
                     return td;
@@ -1033,6 +1035,11 @@
                     if (it.lists && it.lists.length) { facts.push('Listas: ' + it.lists.join(', ')); }
                     if (it.checked_at) { facts.push('Consultado: ' + new Date(it.checked_at * 1000).toLocaleString('es-ES')); }
                     if (facts.length) { td.appendChild(el('div', 'muted', facts.join(' · '))); }
+                    if (it.status && it.status !== 'pending' && it.status !== 'disabled' && it.status !== 'internal') {
+                        var rb = el('button', 'btn btn-xs btn-default', '↻ Reintentar consulta'); rb.type = 'button'; rb.style.marginTop = '6px';
+                        rb.addEventListener('click', function () { rb.disabled = true; rb.textContent = 'Consultando…'; post(URL_RECHECK, { ip: row.ip }); });
+                        td.appendChild(rb);
+                    }
                     tr.appendChild(td); return tr;
                 }
                 // Botón «Bloquear operador» (ASN entero) bajo el proveedor de una IP.
