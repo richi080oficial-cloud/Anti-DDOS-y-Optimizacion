@@ -1,6 +1,6 @@
 # Anti-DDoS y Optimización para Pterodactyl — MEMORIA DEL PROYECTO
 
-> **Lee este archivo entero antes de tocar nada.** Resume el proyecto, cómo trabaja el usuario, la arquitectura, las trampas ya conocidas y todo lo hecho en la sesión que lo creó. Versión actual del código: **1.12.0** (`VERSION`). Rama de trabajo: **`main`** (única).
+> **Lee este archivo entero antes de tocar nada.** Resume el proyecto, cómo trabaja el usuario, la arquitectura, las trampas ya conocidas y todo lo hecho en la sesión que lo creó. Versión actual del código: **1.13.1** (`VERSION`). Rama de trabajo: **`main`** (única).
 
 ---
 
@@ -210,6 +210,8 @@ sudo antiddos status ; systemctl is-active antiddos-live
 | 1.11.1 | Tabla «Quién se está conectando» con muchas IPs en «Origen desconocido / Sin datos» y la IP del propio servidor como visitante. Causas: solo había 2 APIs gratuitas (ipwho.is, ipapi.co) que se saturan y el fallo se guardaba **10 min**; el agente no excluye la IP pública propia. Arreglo en `IpIntel`: ASN + titular por **RIPEstat `prefix-overview`** (fiable, sin clave) y país/ciudad por el primer servicio que responda de `ipwho`·`freeipapi`·`geojs`·`ripegeo`·`ipapi`; cada servicio que falla (429/403/5xx/timeout/límite) queda en pausa 5 min (`antiddos:intel:cool:<proveedor>`); sin geolocalización el estado es **`partial`** ("Origen no disponible") con TTL de 2 min en vez de 10; `recheck()` + ruta `intel.recheck` + botón «↻ Reintentar consulta» en detalles. `AdminController::topIps` omite `SafeIps::isInfrastructure` (nodos, panel, IPs de los agentes). |
 
 | 1.12.0 | Petición: «diferenciar entre usuarios que hacen cosas en el panel (muchas peticiones) y ataques». El escudo trataba a todos igual por IP y corre antes de la sesión, así que un admin/cliente con consola, archivos y varias pestañas —o una oficina con una IP— podía acabar bloqueado. Nuevo `PanelIdentity` (ver §4.2) + ajuste `user_limit` (1500/min por usuario con sesión/clave, campo nuevo en «Escudo web»). Anónimos sin cambios. Verificado solo con sintaxis; no probado en servidor real. |
+| 1.13.0 | (otra sesión) Entrada del menú de administración oculta por defecto, con interruptor propio. |
+| 1.13.1 | Usuario: «primero me sale sin datos y cuando le doy a intentar otra vez sí». Causa: un solo fallo de un servicio de origen lo dejaba en pausa **5 min** y el resultado fallido se guardaba **2 min**; «Reintentar» funcionaba porque borra las pausas. Arreglo en `IpIntel`: pausas de 90 s (límite 429/403) o 20 s (error puntual) con `cool()`; `tryGeo()`; si nadie responde se prueban igualmente 2 servicios en pausa; RIPEstat con 1 reintento; `TTL_FAIL` 15 s; la marca de «en cola» se libera al acabar la consulta (antes bloqueaba reintentos 90 s). Solo sintaxis verificada; no probado en servidor real. |
 Decisiones del usuario a recordar: quitar la optimización; una sola rama; el nombre se queda; quería ver **por qué** se bloquea cada cosa y evitar bloqueos sin sentido; quiere datos **precisos y veraces** en la gráfica.
 
 ---

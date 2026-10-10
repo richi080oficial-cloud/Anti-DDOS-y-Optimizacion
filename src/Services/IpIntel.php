@@ -30,7 +30,7 @@ use Pterodactyl\Extensions\AntiDDoS\Models\ShieldSetting;
 class IpIntel
 {
     protected const TTL = 21600;       // 6 h
-    protected const TTL_FAIL = 120;    // 2 min si no se ha podido consultar el origen: se reintenta enseguida
+    protected const TTL_FAIL = 15;     // 15 s si no se ha podido consultar el origen: se reintenta casi enseguida
     protected const MAX_PER_REQUEST = 5;
 
     /** @var array<int, string> */
@@ -106,11 +106,15 @@ class IpIntel
             return ['status' => 'internal', 'verdict' => 'clean', 'verdict_text' => 'IP interna', 'reasons' => []];
         }
 
-        $geo = $this->geo($ip);
-        $matches = $this->lists->match($ip);
-        $abuse = $this->abuse($ip);
+        try {
+            $geo = $this->geo($ip);
+            $matches = $this->lists->match($ip);
+            $abuse = $this->abuse($ip);
 
-        $intel = $this->assess($ip, $geo, $matches, $abuse);
+            $intel = $this->assess($ip, $geo, $matches, $abuse);
+        } finally {
+            Cache::forget($this->key($ip, 'q'));
+        }
 
         Cache::put($this->key($ip), $intel, $geo === null ? self::TTL_FAIL : self::TTL);
 
@@ -240,21 +244,31 @@ class IpIntel
         // 2) Pais y ciudad: el primer servicio que responda. Uno que falle (limite de uso,
         //    caido, lento) se salta 5 minutos para no gastar tiempo ni cuota con todas las IPs.
         $g = null;
+        $skipped = [];
 
         foreach (['ipwho', 'freeipapi', 'geojs', 'ripegeo', 'ipapi'] as $provider) {
             if (Cache::has($this->coolKey($provider))) {
+                $skipped[] = $provider;
+
                 continue;
             }
 
-            try {
-                $g = $this->{'geo' . ucfirst($provider)}($ip);
-            } catch (\Throwable $e) {
-                Cache::put($this->coolKey($provider), 1, 300);
-                $g = null;
-            }
+            $g = $this->tryGeo($provider, $ip);
 
             if ($g !== null) {
                 break;
+            }
+        }
+
+        // Si nadie ha respondido, se prueban de verdad (aunque estuvieran en pausa) un par de servicios:
+        // una pausa vieja nunca debe dejar la IP sin origen cuando el servicio ya funciona.
+        if ($g === null) {
+            foreach (array_slice($skipped, 0, 2) as $provider) {
+                $g = $this->tryGeo($provider, $ip);
+
+                if ($g !== null) {
+                    break;
+                }
             }
         }
 
@@ -269,6 +283,32 @@ class IpIntel
             (string) ($g['country'] ?? ''), (string) ($g['cc'] ?? ''), (string) ($g['region'] ?? ''), (string) ($g['city'] ?? ''),
             $asn, (string) ($org ?? '')
         );
+    }
+
+    /** @return array<string, mixed>|null */
+    protected function tryGeo(string $provider, string $ip): ?array
+    {
+        try {
+            $g = $this->{'geo' . ucfirst($provider)}($ip);
+            Cache::forget($this->coolKey($provider));
+
+            return $g;
+        } catch (\Throwable $e) {
+            $this->cool($provider, $e);
+
+            return null;
+        }
+    }
+
+    /**
+     * Pausa corta tras un fallo: 90 s si el servicio nos limita (429/403/cuota), 20 s si fue un
+     * error puntual (tiempo agotado, 5xx). Antes eran 5 min para todo y un solo fallo dejaba
+     * todas las IPs «sin datos» hasta pulsar «Reintentar».
+     */
+    protected function cool(string $provider, \Throwable $e): void
+    {
+        $limited = (bool) preg_match('/HTTP (429|403)|limite/i', $e->getMessage());
+        Cache::put($this->coolKey($provider), 1, $limited ? 90 : 20);
     }
 
     protected function coolKey(string $provider): string
@@ -292,7 +332,7 @@ class IpIntel
         }
 
         try {
-            $r = Http::timeout(4)->acceptJson()->get('https://stat.ripe.net/data/prefix-overview/data.json', ['resource' => $ip, 'sourceapp' => 'antiddos-pterodactyl']);
+            $r = Http::timeout(4)->retry(2, 300, null, false)->acceptJson()->get('https://stat.ripe.net/data/prefix-overview/data.json', ['resource' => $ip, 'sourceapp' => 'antiddos-pterodactyl']);
             $this->guard($r);
             $a = $r->json('data.asns.0');
 
@@ -304,7 +344,7 @@ class IpIntel
                 return ['AS' . $a['asn'], $holder !== '' ? $holder : null];
             }
         } catch (\Throwable $e) {
-            Cache::put($this->coolKey('ripe'), 1, 120);
+            $this->cool('ripe', $e);
         }
 
         return [null, null];
