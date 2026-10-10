@@ -34,5 +34,13 @@
     "antiddos fw",
     "antiddos attack-on",
     "antiddos attack-off"
-  ]
+  ],
+  "vexahub": {
+    "type": "manager",
+    "icon": "fa-shield",
+    "url": "admin/extensions/antiddos",
+    "drop_data": true,
+    "install_note": "Desde Vexa Hub se instala la parte del panel. El firewall del nodo se instala aparte desde la terminal: sudo antiddos install-all",
+    "uninstall_note": "También se quita el firewall del nodo de esta máquina."
+  }
 }
