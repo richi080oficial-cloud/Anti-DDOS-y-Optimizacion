@@ -18,6 +18,7 @@ Route::middleware(['web', 'auth', AdminAuthenticate::class])
     ->name('admin.extensions.antiddos.')
     ->group(function () {
         Route::get('/', [AdminController::class, 'index'])->name('index');
+        Route::post('/sidebar', \Pterodactyl\Extensions\AntiDDoS\Http\Controllers\Admin\SidebarController::class)->name('sidebar');
         Route::patch('/settings', [AdminController::class, 'updateSettings'])->name('settings.update');
         Route::patch('/firewall', [AdminController::class, 'updateFirewall'])->name('firewall.update');
         Route::post('/attack', [AdminController::class, 'attackMode'])->name('attack');

@@ -44,7 +44,8 @@ class AdminSidebarLink
     {
         $response = $next($request);
 
-        if (!$this->applies($request, $response)) {
+        // Oculto por defecto con Vexa Hub salvo que el plugin este fijado en el menu (ver Support/Sidebar.php).
+        if (!$this->applies($request, $response) || !\Pterodactyl\Extensions\AntiDDoS\Support\Sidebar::visible()) {
             return $response;
         }
 

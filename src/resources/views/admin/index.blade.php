@@ -13,6 +13,7 @@
 @endsection
 
 @section('content')
+    @include('antiddos::admin.sidebar')
     @php
         $matchedIds = collect($health['nodes'])->pluck('agent.id')->filter()->all();
         $otherAgents = $health['agents']->reject(fn ($a) => in_array($a->id, $matchedIds, true));

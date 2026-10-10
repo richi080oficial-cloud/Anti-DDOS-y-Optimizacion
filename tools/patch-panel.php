@@ -111,6 +111,8 @@ function insertSidebarEntry(string $contents): ?string
     // los plugins de Vexa Studio: se imprime una sola vez por peticion via un
     // guard en $GLOBALS, sin importar cuantos esten instalados.
     $block = wrap($indent, [
+        // Con Vexa Hub la entrada esta oculta salvo que el plugin este fijado en el menu (ver Support/Sidebar.php).
+        $inner . '@if (class_exists(\\Pterodactyl\\Extensions\\AntiDDoS\\Support\\Sidebar::class) && \\Pterodactyl\\Extensions\\AntiDDoS\\Support\\Sidebar::visible())',
         $inner . '@if (empty($GLOBALS[\'__vexastudios_sidebar_header\']))',
         $inner . '    <li class="header">VEXA STUDIO</li>',
         $inner . '    @php($GLOBALS[\'__vexastudios_sidebar_header\'] = true)',
@@ -120,6 +122,7 @@ function insertSidebarEntry(string $contents): ?string
         $inner . '        <i class="fa fa-shield"></i> <span>Anti-DDoS y Optimización</span>',
         $inner . '    </a>',
         $inner . '</li>',
+        $inner . '@endif',
     ]);
 
     $lineStart = lineStartAt($contents, $close);

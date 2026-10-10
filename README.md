@@ -198,3 +198,10 @@ Para cortar ataques HTTP **antes de PHP**, activa también los límites de nginx
 ## Licencia
 
 MIT · Vexa Studio
+
+
+## Menú lateral
+
+Con [Vexa Hub](https://github.com/richi080oficial-cloud/VexaHub) instalado, la entrada de **Anti-DDoS y Optimización** **no aparece en el menú lateral** del admin: se abre desde su tarjeta en Vexa Hub (botón *Ajustes*). Para tenerla a mano, marca **«Mostrar Anti-DDoS y Optimización en el menú lateral»** arriba en su página de ajustes.
+
+El ajuste es común a todos los plugins de Vexa Studio (`vexahub::pinned` en la tabla `settings` del panel) y también se cambia desde Vexa Hub → Configuración. Sin Vexa Hub la entrada se muestra siempre. Si algo falla al leer el ajuste, la entrada se muestra: un plugin nunca se queda sin forma de abrirlo.
