@@ -85,6 +85,7 @@ class AdminController extends Controller
     {
         $data = $request->validate([
             'general_limit' => 'required|integer|min:30|max:100000',
+            'user_limit' => 'required|integer|min:120|max:200000',
             'auth_limit' => 'required|integer|min:3|max:1000',
             'ban_minutes' => 'required|integer|min:1|max:10080',
             'ban_max_minutes' => 'required|integer|min:1|max:43200',
@@ -98,6 +99,7 @@ class AdminController extends Controller
             'enabled' => $request->boolean('enabled'),
             'log_events' => $request->boolean('log_events'),
             'general_limit' => $data['general_limit'],
+            'user_limit' => $data['user_limit'],
             'auth_limit' => $data['auth_limit'],
             'ban_minutes' => $data['ban_minutes'],
             'ban_max_minutes' => max((int) $data['ban_minutes'], (int) $data['ban_max_minutes']),

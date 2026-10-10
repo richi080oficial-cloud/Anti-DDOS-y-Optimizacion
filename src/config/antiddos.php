@@ -17,6 +17,10 @@ return [
         // assets estaticos ni la API interna de Wings (api/remote/*).
         'general_limit' => 480,
 
+        // Peticiones por minuto de un USUARIO con sesion iniciada o clave de API valida
+        // (se cuenta por usuario, no por IP). Pasarse da un 429 breve, sin bloquear la IP.
+        'user_limit' => 1500,
+
         // Intentos por minuto y por IP contra las rutas de login/contrasena.
         'auth_limit' => 15,
 

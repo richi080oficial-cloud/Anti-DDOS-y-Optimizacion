@@ -9,6 +9,7 @@ use Pterodactyl\Extensions\AntiDDoS\Models\ShieldSetting;
 use Pterodactyl\Extensions\AntiDDoS\Services\BlockManager;
 use Pterodactyl\Extensions\AntiDDoS\Services\IpMatcher;
 use Pterodactyl\Extensions\AntiDDoS\Services\NetworkBlocks;
+use Pterodactyl\Extensions\AntiDDoS\Services\PanelIdentity;
 use Pterodactyl\Extensions\AntiDDoS\Services\RateCounter;
 use Pterodactyl\Extensions\AntiDDoS\Services\SafeIps;
 use Symfony\Component\HttpFoundation\Response;
@@ -24,8 +25,10 @@ use Symfony\Component\HttpFoundation\Response;
  *   2. IP interna (privada/loopback) o en la lista blanca: pasa siempre.
  *   3. IP bloqueada: 429. IP de un operador (ASN) o pais bloqueado: 403.
  *   4. Assets estaticos: pasan sin contarse.
- *   5. Se cuenta la peticion; si supera el limite, se bloquea (con
- *      duracion creciente por reincidencia) y se responde 429.
+ *   5. Usuario con sesion/clave de API validas (PanelIdentity): se cuenta por
+ *      usuario con un limite alto; pasarse = 429 breve, sin bloquear la IP.
+ *   6. Visitante anonimo: se cuenta por IP; si supera el limite, se bloquea
+ *      (con duracion creciente por reincidencia) y se responde 429.
  *
  * Si la IP que ve el panel es siempre la de un proxy interno (TRUSTED_PROXIES
  * sin configurar), todas las peticiones parecen internas y el escudo no hace
@@ -93,8 +96,35 @@ class ShieldGuard
             }
         }
 
+        // Quien usa el panel con sesion o clave de API validas (consola, archivos, varias
+        // pestañas, una oficina con una sola IP...) cuenta POR USUARIO con un limite
+        // alto y no gasta el cupo de la IP. Solo el visitante anonimo paga el limite estricto.
+        $who = app(PanelIdentity::class)->resolve($request, $ip);
+
+        if ($who !== null) {
+            return $this->userLimit($request, $ip, $who, max(120, (int) $settings['user_limit']));
+        }
+
         if ($this->counter->hit('all', $ip) > max(10, (int) $settings['general_limit'])) {
             return $this->ban($request, $ip, 'Exceso de peticiones por minuto');
+        }
+
+        return null;
+    }
+
+    /**
+     * Limites de un usuario reconocido. Pasarse del suyo solo da un 429 breve (no
+     * bloquea la IP: puede haber mas gente detras). Un tope por IP, mucho mas alto,
+     * sigue frenando a quien reparte el abuso entre muchas sesiones.
+     */
+    protected function userLimit(Request $request, string $ip, string $who, int $limit): ?Response
+    {
+        if ($this->counter->hit('usr', $who) > $limit) {
+            return $this->deny($request, 30);
+        }
+
+        if ($this->counter->hit('usrip', $ip) > $limit * 5) {
+            return $this->ban($request, $ip, 'Exceso de peticiones por minuto (varias sesiones)');
         }
 
         return null;

@@ -424,7 +424,10 @@
                     <div class="f-row" style="margin-top:12px;">
                         <div class="f"><label for="general_limit">Peticiones por minuto</label>
                             <input class="form-control" type="number" id="general_limit" name="general_limit" min="30" max="100000" value="{{ old('general_limit', $settings['general_limit']) }}">
-                            <small>Por IP. No cuentan los archivos estáticos ni Wings.</small></div>
+                            <small>Visitantes sin sesión, por IP. No cuentan los archivos estáticos ni Wings.</small></div>
+                        <div class="f"><label for="user_limit">Peticiones por minuto (con sesión)</label>
+                            <input class="form-control" type="number" id="user_limit" name="user_limit" min="120" max="200000" value="{{ old('user_limit', $settings['user_limit']) }}">
+                            <small>Por usuario con sesión o clave de API válida. Pasarse da un aviso breve, no bloquea la IP.</small></div>
                         <div class="f"><label for="auth_limit">Intentos de login por minuto</label>
                             <input class="form-control" type="number" id="auth_limit" name="auth_limit" min="3" max="1000" value="{{ old('auth_limit', $settings['auth_limit']) }}">
                             <small>Por IP.</small></div>
