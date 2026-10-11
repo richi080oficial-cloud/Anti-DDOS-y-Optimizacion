@@ -175,17 +175,16 @@ check_disk() {
 }
 
 slim_sources() {
-    local d="$STATE_DIR/source"
-    if [ -d "$d" ] && { [ -f "$d/extension.json" ] || [ -f "$d/VERSION" ]; } \
-        && { [ -f "$d/$INSTALLER_REL" ] || [ -f "$d/tools/register-provider.php" ] || [ -f "$d/scripts/patcher.php" ]; }; then
+    local d
+    for d in "$STATE_DIR/source" "$SRC_DIR"; do
+        [ -n "$d" ] && [ -d "$d" ] || continue
+        { [ -f "$d/extension.json" ] || [ -f "$d/VERSION" ]; } || continue
+        { [ -f "$d/$INSTALLER_REL" ] || [ -f "$d/tools/register-provider.php" ] || [ -f "$d/scripts/patcher.php" ]; } || continue
         find "$d" -mindepth 1 -maxdepth 1 ! -name scripts ! -name tools ! -name patches ! -name bin ! -name '*.sh' \
             ! -name extension.json ! -name VERSION ! -name .gitattributes ! -name .vexa-slim -exec rm -rf {} + 2>/dev/null || true
         date '+%F %T' > "$d/.vexa-slim" 2>/dev/null || true
         chmod -R o-rwx "$d" 2>/dev/null || true
-        case "$SRC_DIR" in
-            /opt/?*) rm -rf "$SRC_DIR" ;;
-        esac
-    fi
+    done
     return 0
 }
 
