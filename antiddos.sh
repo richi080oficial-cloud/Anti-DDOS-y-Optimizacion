@@ -101,6 +101,10 @@ require_cmd() {
 }
 
 # ── Descargar / actualizar el código fuente ───────────────────────────────────
+kit_dir() {
+    if [[ -f "$SRC_DIR/$NODE_REL" ]]; then echo "$SRC_DIR"; else echo "$STATE_DIR/source"; fi
+}
+
 sync_sources() {
     require_cmd git
     if [[ -d "$SRC_DIR/.git" ]]; then
@@ -151,9 +155,14 @@ install_cli() {
 }
 
 run_installer() {
-    [[ -f "$SRC_DIR/$INSTALLER_REL" ]] || sync_sources
-    PANEL_DIR="$PANEL" WEB_USER="$WEB_USER" ANTIDDOS_REPO="$REPO_URL" SRC_DIR="$SRC_DIR" \
-        bash "$SRC_DIR/$INSTALLER_REL" "$@"
+    # Sin /opt/<plugin> (kit mínimo) el desinstalador sale de la copia que guarda el plugin en $STATE_DIR/source.
+    local dir="$SRC_DIR"
+    if [[ ! -f "$dir/$INSTALLER_REL" && "${1:-}" == "uninstall" && -f "$STATE_DIR/source/$INSTALLER_REL" ]]; then
+        dir="$STATE_DIR/source"
+    fi
+    [[ -f "$dir/$INSTALLER_REL" ]] || { sync_sources; dir="$SRC_DIR"; }
+    PANEL_DIR="$PANEL" WEB_USER="$WEB_USER" ANTIDDOS_REPO="$REPO_URL" SRC_DIR="$dir" \
+        bash "$dir/$INSTALLER_REL" "$@"
 }
 
 # ── Instalación del panel ─────────────────────────────────────────────────────
@@ -192,15 +201,19 @@ check_disk() {
 # Se conservan solo los scripts que necesita el desinstalador. La siguiente instalación o actualización vuelve a
 # descargar el código al momento.
 slim_sources() {
-    local d
-    for d in "$SRC_DIR" "$STATE_DIR/source"; do
-        [ -n "$d" ] && [ "$d" != "/" ] && [ -d "$d" ] || continue
-        [ -f "$d/extension.json" ] || [ -f "$d/VERSION" ] || continue
-        [ -f "$d/scripts/addon-install.sh" ] || [ -f "$d/tools/register-provider.php" ] || [ -f "$d/scripts/patcher.php" ] || continue
+    # El kit (solo lo que necesita el desinstalador) vive en $STATE_DIR/source, cerrado al resto de usuarios.
+    local d="$STATE_DIR/source"
+    if [ -d "$d" ] && { [ -f "$d/extension.json" ] || [ -f "$d/VERSION" ]; } \
+        && { [ -f "$d/$INSTALLER_REL" ] || [ -f "$d/tools/register-provider.php" ] || [ -f "$d/scripts/patcher.php" ]; }; then
         find "$d" -mindepth 1 -maxdepth 1 ! -name scripts ! -name tools ! -name patches ! -name bin ! -name '*.sh' \
             ! -name extension.json ! -name VERSION ! -name .gitattributes ! -name .vexa-slim -exec rm -rf {} + 2>/dev/null || true
         date '+%F %T' > "$d/.vexa-slim" 2>/dev/null || true
-    done
+        chmod -R o-rwx "$d" 2>/dev/null || true
+        # Y el clon descargado (/opt/<plugin>, con todo el código y su historial) se borra entero.
+        case "$SRC_DIR" in
+            /opt/?*) rm -rf "$SRC_DIR" ;;
+        esac
+    fi
     return 0
 }
 
@@ -276,7 +289,7 @@ do_update() {
     if [[ -z "$(detect_panel)" ]] && node_installed; then
         sync_sources
         info "Actualizando el agente de nodo…"
-        bash "$SRC_DIR/$NODE_REL" install --yes
+        bash "$(kit_dir)/$NODE_REL" install --yes
         install_cli
         ok "Agente de nodo actualizado (configuración conservada)."
         return
@@ -301,7 +314,7 @@ do_update() {
     install_cli
     # Si esta misma máquina también es nodo, se actualiza el agente.
     if node_installed; then
-        bash "$SRC_DIR/$NODE_REL" install --yes
+        bash "$(kit_dir)/$NODE_REL" install --yes
     fi
     ok "Extensión actualizada a la última versión."
     slim_sources
@@ -345,10 +358,10 @@ do_uninstall() {
     fi
 
     if node_installed; then
-        [[ -f "$SRC_DIR/$NODE_REL" ]] && bash "$SRC_DIR/$NODE_REL" uninstall || warn "No se pudo quitar el agente de nodo con el script; revisa 'systemctl list-units antiddos*'."
+        [[ -f "$(kit_dir)/$NODE_REL" ]] && bash "$(kit_dir)/$NODE_REL" uninstall || warn "No se pudo quitar el agente de nodo con el script; revisa 'systemctl list-units antiddos*'."
     fi
 
-    [[ -f "$SRC_DIR/scripts/nginx-shield.sh" ]] && bash "$SRC_DIR/scripts/nginx-shield.sh" off >/dev/null 2>&1 || true
+    [[ -f "$(kit_dir)/scripts/nginx-shield.sh" ]] && bash "$(kit_dir)/scripts/nginx-shield.sh" off >/dev/null 2>&1 || true
 
     autoupdate_off quiet
     rm -rf "$SRC_DIR"
@@ -378,7 +391,7 @@ do_install_all() {
     local args=(install --panel-dir="$PANEL" --key="$key")
     [[ "$url" =~ ^https?://[A-Za-z0-9._:/-]+$ ]] && args+=(--panel-url="$url")
     [[ "$FORCE" == "1" ]] && args+=(--yes)
-    bash "$SRC_DIR/$NODE_REL" "${args[@]}" "${PASSTHRU[@]}"
+    bash "$(kit_dir)/$NODE_REL" "${args[@]}" "${PASSTHRU[@]}"
 
     ok "Todo instalado: panel + nodo. Los bloqueos del panel llegan al firewall en menos de 30 s."
     info "Panel: ${url:-tu-panel}/admin/extensions/antiddos   ·   Estado: sudo antiddos status"
@@ -387,19 +400,19 @@ do_install_all() {
 # ── Agente de nodo (firewall anti-DDoS) ───────────────────────────────────────
 do_node_install() {
     sync_sources
-    [[ -f "$SRC_DIR/$NODE_REL" ]] || fail "Falta $NODE_REL en el repositorio."
-    bash "$SRC_DIR/$NODE_REL" install "${PASSTHRU[@]}" $([[ "$FORCE" == "1" ]] && echo --yes)
+    [[ -f "$(kit_dir)/$NODE_REL" ]] || fail "Falta $NODE_REL en el repositorio."
+    bash "$(kit_dir)/$NODE_REL" install "${PASSTHRU[@]}" $([[ "$FORCE" == "1" ]] && echo --yes)
     install_cli
 }
 
 do_node_uninstall() {
-    [[ -f "$SRC_DIR/$NODE_REL" ]] || fail "No se encuentra el agente en $SRC_DIR. ¿Está instalado?"
-    bash "$SRC_DIR/$NODE_REL" uninstall
+    [[ -f "$(kit_dir)/$NODE_REL" ]] || fail "No se encuentra el agente en $SRC_DIR. ¿Está instalado?"
+    bash "$(kit_dir)/$NODE_REL" uninstall
 }
 
 do_node_status() {
-    if [[ -f "$SRC_DIR/$NODE_REL" ]]; then
-        bash "$SRC_DIR/$NODE_REL" status
+    if [[ -f "$(kit_dir)/$NODE_REL" ]]; then
+        bash "$(kit_dir)/$NODE_REL" status
     elif node_installed; then
         "$FW_BIN" status
     else
@@ -487,8 +500,8 @@ do_ip() {
 }
 
 do_nginx() {
-    [[ -f "$SRC_DIR/scripts/nginx-shield.sh" ]] || sync_sources
-    bash "$SRC_DIR/scripts/nginx-shield.sh" "$1" "${PASSTHRU[@]}"
+    [[ -f "$(kit_dir)/scripts/nginx-shield.sh" ]] || sync_sources
+    bash "$(kit_dir)/scripts/nginx-shield.sh" "$1" "${PASSTHRU[@]}"
 }
 
 # ── Auto-update ───────────────────────────────────────────────────────────────
