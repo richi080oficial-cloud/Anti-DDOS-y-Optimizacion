@@ -187,6 +187,23 @@ check_disk() {
     fi
 }
 
+# Kit mínimo: cuando termina de instalar o actualizar, se va todo lo que no hace falta. El código ya está en el
+# panel; no se deja en la VPS un clon completo con su historial (/opt/...) ni una copia entera del repositorio.
+# Se conservan solo los scripts que necesita el desinstalador. La siguiente instalación o actualización vuelve a
+# descargar el código al momento.
+slim_sources() {
+    local d
+    for d in "$SRC_DIR" "$STATE_DIR/source"; do
+        [ -n "$d" ] && [ "$d" != "/" ] && [ -d "$d" ] || continue
+        [ -f "$d/extension.json" ] || [ -f "$d/VERSION" ] || continue
+        [ -f "$d/scripts/addon-install.sh" ] || [ -f "$d/tools/register-provider.php" ] || [ -f "$d/scripts/patcher.php" ] || continue
+        find "$d" -mindepth 1 -maxdepth 1 ! -name scripts ! -name tools ! -name patches ! -name bin ! -name '*.sh' \
+            ! -name extension.json ! -name VERSION ! -name .gitattributes ! -name .vexa-slim -exec rm -rf {} + 2>/dev/null || true
+        date '+%F %T' > "$d/.vexa-slim" 2>/dev/null || true
+    done
+    return 0
+}
+
 do_install() {
     check_disk
     require_panel
@@ -201,6 +218,7 @@ do_install() {
     info "Instalando la extensión en el panel…"
     run_installer install
     install_cli
+    slim_sources
 }
 
 install_menu() {
@@ -286,6 +304,7 @@ do_update() {
         bash "$SRC_DIR/$NODE_REL" install --yes
     fi
     ok "Extensión actualizada a la última versión."
+    slim_sources
 }
 
 # ── Desinstalación ────────────────────────────────────────────────────────────
