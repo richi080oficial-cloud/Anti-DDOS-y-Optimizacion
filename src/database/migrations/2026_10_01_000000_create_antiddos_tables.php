@@ -22,7 +22,6 @@ return new class extends Migration
                 $table->increments('id');
                 $table->string('ip', 64)->unique();
                 $table->string('reason')->nullable();
-                // auto = escudo web | manual = admin/CLI | api = otro sistema
                 $table->string('source', 16)->default('manual');
                 $table->unsignedInteger('strikes')->default(1);
                 $table->unsignedInteger('user_id')->nullable();

@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-#
-# Comando global de Anti-DDoS y Optimización.
-# Delega en el gestor (/opt/antiddos/antiddos.sh) si está disponible
-# y, en su defecto, en el instalador guardado por la propia extensión.
-#
 set -Eeuo pipefail
 
 SRC_DIR="${SRC_DIR:-/opt/antiddos}"
@@ -11,7 +6,6 @@ STATE_DIR="/usr/local/share/antiddos"
 MANAGER="${SRC_DIR}/antiddos.sh"
 INSTALLER="${STATE_DIR}/source/scripts/addon-install.sh"
 
-# Ejecución directa desde el repositorio clonado (./bin/antiddos ...).
 LOCAL_MANAGER="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/antiddos.sh"
 
 if [ -f "$MANAGER" ]; then

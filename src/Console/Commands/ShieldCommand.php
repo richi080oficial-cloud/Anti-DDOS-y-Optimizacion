@@ -102,9 +102,6 @@ class ShieldCommand extends Command
     protected function apiKey(): int
     {
         if ($this->option('if-missing') && (string) (ShieldSetting::read('api_key_hash') ?? '') !== '') {
-            // La instalacion la llama en cada install/update para que la clave
-            // se genere sola la primera vez; en las siguientes ya existe y no
-            // hay que tocarla (invalidaria a los nodos ya configurados).
             return self::SUCCESS;
         }
 
@@ -156,7 +153,6 @@ class ShieldCommand extends Command
         return self::SUCCESS;
     }
 
-    /** Origen y reputacion de una IP (consulta completa, sin cache). */
     protected function ip(array $args): int
     {
         $ip = (string) ($args[0] ?? '');
@@ -194,7 +190,6 @@ class ShieldCommand extends Command
         return self::SUCCESS;
     }
 
-    /** Una pasada del bloqueo automatico de IPs maliciosas (la lanza el cron cada minuto). */
     protected function autoBlock(): int
     {
         $auto = app(AutoBlocker::class);
@@ -227,7 +222,6 @@ class ShieldCommand extends Command
         return self::SUCCESS;
     }
 
-    /** Latido del agente de nodo local (mismo efecto que POST /api/antiddos/heartbeat). */
     protected function heartbeat(): int
     {
         $data = json_decode((string) $this->option('payload'), true);
@@ -241,11 +235,6 @@ class ShieldCommand extends Command
         return self::SUCCESS;
     }
 
-    /**
-     * Latido + lista en una sola ejecucion (agente local): arrancar PHP/Laravel es lo
-     * mas caro de la sincronizacion, asi se hace una vez cada 30 s en vez de dos.
-     * Un latido no valido nunca impide entregar la lista.
-     */
     protected function sync(BlockManager $blocks): int
     {
         $data = json_decode((string) $this->option('payload'), true);
@@ -254,14 +243,12 @@ class ShieldCommand extends Command
             try {
                 app(AgentRegistry::class)->record($data);
             } catch (\Throwable $e) {
-                // Sin tabla de agentes (migracion pendiente): la lista se entrega igual.
             }
         }
 
         return $this->feed($blocks);
     }
 
-    /** Lista de bloqueos y lista blanca en texto plano (la lee el agente de nodo local). */
     protected function feed(BlockManager $blocks): int
     {
         $this->getOutput()->write($blocks->feed());
@@ -269,7 +256,6 @@ class ShieldCommand extends Command
         return self::SUCCESS;
     }
 
-    /** @param array<int, string> $args */
     protected function ban(BlockManager $blocks, array $args): int
     {
         $ip = (string) ($args[0] ?? '');
@@ -296,7 +282,6 @@ class ShieldCommand extends Command
         return self::SUCCESS;
     }
 
-    /** @param array<int, string> $args */
     protected function unban(BlockManager $blocks, array $args): int
     {
         $ip = (string) ($args[0] ?? '');
@@ -333,7 +318,6 @@ class ShieldCommand extends Command
         return self::SUCCESS;
     }
 
-    /** @param array<int, string> $args */
     protected function whitelist(array $args): int
     {
         $sub = (string) ($args[0] ?? 'list');
@@ -362,11 +346,6 @@ class ShieldCommand extends Command
         return self::SUCCESS;
     }
 
-    /**
-     * Bloqueo de operadores (ASN) y paises: block|unblock|list|refresh.
-     *
-     * @param array<int, string> $args
-     */
     protected function net(string $kind, array $args): int
     {
         $nets = app(NetworkBlocks::class);
@@ -433,7 +412,6 @@ class ShieldCommand extends Command
         return self::SUCCESS;
     }
 
-    /** Aclara el historial de la grafica (lo ejecuta el scheduler cada hora). */
     protected function compactMetrics(): int
     {
         try {

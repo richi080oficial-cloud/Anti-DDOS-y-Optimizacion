@@ -21,7 +21,6 @@
     @endphp
 
     <style>
-        /* Sin colores de fondo fijos: hereda el tema activo (claro, oscuro o de terceros). */
         .ad, .ad * { box-sizing: border-box; }
         .ad { width: 100%; max-width: 100%; clear: both; --ok: #00a65a; --warn: #f39c12; --err: #dd4b39; --pri: #3c8dbc; --line: rgba(127,127,127,.28); }
         .ad .card { border: 1px solid var(--line); border-radius: 6px; margin-bottom: 16px; }
@@ -108,7 +107,6 @@
             <div class="alert w"><b>Nueva clave de la API</b> (cópiala ahora, no se vuelve a mostrar):<pre>{{ session('antiddos:newkey') }}</pre></div>
         @endif
 
-        {{-- ─────────── Cabecera de estado ─────────── --}}
         <div class="card hero {{ $health['level'] }}">
             <div class="ico">{{ ['ok' => '🛡️', 'warn' => '⚠️', 'error' => '🔧'][$health['level']] }}</div>
             <div class="txt">
@@ -128,7 +126,6 @@
             </div>
         </div>
 
-        {{-- ─────────── Bloqueo rápido de un operador (ASN), visible en todas las pestañas ─────────── --}}
         <form action="{{ route('admin.extensions.antiddos.networks.store') }}" method="POST" class="card quick-asn"
               onsubmit="var v = this.querySelector('[name=value]').value.trim(); return v !== '' && confirm('¿Bloquear el operador ' + v + ' ENTERO (todas sus IPs, también las nuevas) en el panel y en todos los nodos?');">
             @csrf
@@ -155,7 +152,6 @@
             <li><a data-tab="events">Eventos</a></li>
         </ul>
 
-        {{-- ═══════════════════════ ESTADO ═══════════════════════ --}}
         <div class="pane" id="pane-status">
             <div class="grid">
                 <div class="col-2">
@@ -236,7 +232,6 @@
             @endif
         </div>
 
-        {{-- ═══════════════════════ PROTECCIÓN ═══════════════════════ --}}
         <div class="pane" id="pane-shield">
             <div class="grid">
                 <div class="col-2">
@@ -457,7 +452,6 @@
             </form>
         </div>
 
-        {{-- ═══════════════════════ TRÁFICO ═══════════════════════ --}}
         <div class="pane" id="pane-traffic">
             <div class="card">
                 <div class="card-h">
@@ -546,7 +540,6 @@
             </div>
         </div>
 
-        {{-- ═══════════════════════ PUERTOS ═══════════════════════ --}}
         <div class="pane" id="pane-ports">
             @if (session('antiddos:report'))
                 <div class="card">
@@ -645,7 +638,6 @@
             </div>
         </div>
 
-        {{-- ═══════════════════════ OPERADORES (ASN) Y PAÍSES ═══════════════════════ --}}
         <div class="pane" id="pane-asn">
             <div class="grid">
                 <div class="col">
@@ -728,7 +720,6 @@
             </div>
         </div>
 
-        {{-- ═══════════════════════ BLOQUEOS DE IPs ═══════════════════════ --}}
         <div class="pane" id="pane-blocks">
             <div class="grid">
                 <div class="col">
@@ -777,7 +768,6 @@
             </div>
         </div>
 
-        {{-- ═══════════════════════ EVENTOS ═══════════════════════ --}}
         <div class="pane" id="pane-events">
             <div class="card">
                 <div class="card-h"><h3>Últimos eventos</h3>
@@ -823,7 +813,6 @@
             $$('[data-goto]').forEach(function (a) { a.addEventListener('click', function () { show(a.getAttribute('data-goto')); }); });
             show(location.hash.replace('#', '') || 'status');
 
-            // Copiar comandos
             $$('.copy').forEach(function (b) {
                 b.addEventListener('click', function () {
                     var clone = b.parentNode.cloneNode(true);
@@ -836,8 +825,6 @@
                 });
             });
 
-
-            // ───────── Bloqueo de operadores / países ─────────
             var netKind = $('#net-kind');
             if (netKind) {
                 var netHint = function () {
@@ -854,7 +841,6 @@
                 });
             }
 
-            // ───────── Puertos ─────────
             var prow = $$('#ad-ports tbody tr[data-name]');
             function pfilter() {
                 var q = ($('#ad-pfilter').value || '').toLowerCase().trim();
@@ -900,7 +886,6 @@
                 });
             }
 
-            // ───────── Gráfica de tráfico ─────────
             var cv = $('#ad-chart');
             if (cv) {
                 var URL_TRAFFIC = @json(route('admin.extensions.antiddos.traffic'));
@@ -955,7 +940,6 @@
                     return Math.round(sec / 3600) + ' h';
                 }
 
-                // Valores a dibujar: unidad elegida y suavizado (media de los k ultimos puntos conocidos).
                 function values(name) {
                     var raw = state.data.series[name] || [], m = mult(), k = state.smooth, out = [], win = [];
                     raw.forEach(function (x) {
@@ -1046,7 +1030,6 @@
                     }
                     tr.appendChild(td); return tr;
                 }
-                // Botón «Bloquear operador» (ASN entero) bajo el proveedor de una IP.
                 function netCell(row) {
                     var it = row.intel || {}, td = el('td', 'net');
                     td.appendChild(document.createTextNode(it.org || '—'));
@@ -1109,7 +1092,6 @@
                 function renderFwBans() {
                     var tb = $('#ad-fwbans'), list = (state.data && state.data.fw_bans) || [];
                     var mode = state.data && state.data.ban_mode; $('#ad-banmode').textContent = { monitor: 'Observación (nunca bloquea)', balanced: 'Equilibrada', strict: 'Estricta' }[mode] || '—';
-                    // La cuenta atras no obliga a repintar: la firma ignora el tiempo restante.
                     var sig = JSON.stringify(list.map(function (b) { return [b.ip, b.why, b.intel && b.intel.verdict, b.intel && b.intel.asn, b.safe_reason, b.net_blocked]; })) + JSON.stringify(state.open);
                     if (sig === state.fwSig) { return; } state.fwSig = sig;
                     tb.innerHTML = '';
@@ -1147,7 +1129,6 @@
                     var vals = {}; defs.forEach(function (x) { vals[x[0]] = values(x[0]); });
                     var stacked = V().stacked, log = state.scale === 'log';
 
-                    // Altura de cada punto (apilado = suma).
                     function total(i) {
                         var t = 0, any = false;
                         defs.forEach(function (x) { var q = vals[x[0]][i]; if (q !== null) { t += q; any = true; } });
@@ -1180,7 +1161,6 @@
                     var nt = Math.min(7, n);
                     for (var t = 0; t < nt; t++) { var idx = Math.round(t * (n - 1) / Math.max(1, nt - 1)); g.fillText(label(d.labels[idx]), X(idx), T + h + 7); }
 
-                    // Tramos continuos: un hueco (null) corta la linea.
                     function runs(arr) { var out = [], cur = []; arr.forEach(function (q, i) { if (q === null) { if (cur.length) { out.push(cur); cur = []; } } else { cur.push(i); } }); if (cur.length) { out.push(cur); } return out; }
 
                     if (stacked) {
@@ -1262,7 +1242,7 @@
                     fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }, cache: 'no-store' })
                         .then(function (r) { if (!r.ok) { throw new Error(r.status); } return r.json(); })
                         .then(function (json) {
-                            if (json.view !== state.view) { return; }   // respuesta vieja de otra vista
+                            if (json.view !== state.view) { return; }
                             state.data = json; state.loadedAt = Date.now(); state.failing = false; render();
                         })
                         .catch(function () { state.failing = true; live(); })
@@ -1311,8 +1291,6 @@
                 cv.addEventListener('mouseleave', function () { draw(); });
                 window.addEventListener('resize', function () { draw(); });
 
-                // Siempre al dia: cada segundo en vivo mientras miras la pestana, cada 15 s el resto del tiempo;
-                // en pausa no se pide nada y al volver a la ventana se refresca al instante.
                 tabs.forEach(function (a) { a.addEventListener('click', function () { if (a.getAttribute('data-tab') === 'traffic') { setTimeout(function () { if (!state.paused) { load(); } draw(); }, 30); } }); });
                 document.addEventListener('visibilitychange', function () { if (!document.hidden && !state.paused) { load(); } });
                 setInterval(function () {

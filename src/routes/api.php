@@ -6,10 +6,6 @@ use Pterodactyl\Extensions\AntiDDoS\Http\Controllers\Api\HeartbeatController;
 use Pterodactyl\Extensions\AntiDDoS\Http\Controllers\Api\LiveController;
 use Pterodactyl\Extensions\AntiDDoS\Http\Middleware\ShieldApiKey;
 
-/*
- * Feed de bloqueos para los agentes de nodo.
- * Prefijo propio para no interferir con la Application API de Pterodactyl.
- */
 Route::middleware(['api', 'throttle:300,1', ShieldApiKey::class])
     ->prefix('api/antiddos')
     ->name('antiddos.api.')

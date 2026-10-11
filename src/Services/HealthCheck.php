@@ -9,31 +9,17 @@ use Pterodactyl\Extensions\AntiDDoS\Models\ShieldAgent;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldSetting;
 use Pterodactyl\Models\Node;
 
-/**
- * Comprueba si la instalacion esta completa y devuelve un informe listo para
- * pintar: comprobaciones del panel y estado del agente de cada nodo.
- *
- * Niveles: ok | warn (funciona, pero mejorable) | error (falta algo).
- */
 class HealthCheck
 {
     protected const TABLES = [
         'antiddos_settings', 'antiddos_blocks', 'antiddos_events', 'antiddos_agents', 'antiddos_metrics', 'antiddos_net_blocks',
     ];
 
-    /**
-     * @return array{
-     *   level: string, title: string, text: string, errors: int, warnings: int,
-     *   checks: array<int, array<string, mixed>>, nodes: array<int, array<string, mixed>>,
-     *   agents: Collection<int, ShieldAgent>, version: string
-     * }
-     */
     public function run(?string $requestIp = null): array
     {
         $version = $this->version();
         $checks = [];
 
-        // ── Panel ────────────────────────────────────────────────────────────
         $missing = array_values(array_filter(self::TABLES, fn (string $t) => !Schema::hasTable($t)));
         $checks[] = $missing === []
             ? $this->item('db', 'Base de datos', 'ok', 'Todas las tablas están creadas.')
@@ -74,7 +60,6 @@ class HealthCheck
                 : $this->item('ip', 'IP real de los visitantes', 'ok', "El panel ve tu IP pública ({$requestIp})."));
         }
 
-        // ── Nodos ────────────────────────────────────────────────────────────
         $agents = ShieldAgent::query()->orderBy('host')->get();
         $nodes = $this->nodes($agents, $version);
 
@@ -95,12 +80,6 @@ class HealthCheck
         return trim((string) @file_get_contents(__DIR__ . '/../VERSION')) ?: 'dev';
     }
 
-    /**
-     * Estado del agente de cada nodo de Pterodactyl.
-     *
-     * @param Collection<int, ShieldAgent> $agents
-     * @return array<int, array<string, mixed>>
-     */
     protected function nodes(Collection $agents, string $version): array
     {
         try {
@@ -158,12 +137,6 @@ class HealthCheck
         return $out;
     }
 
-    /**
-     * Relaciona un nodo con su agente: por IP del FQDN, por nombre de host o,
-     * si solo hay un nodo y un agente, directamente.
-     *
-     * @param Collection<int, ShieldAgent> $agents
-     */
     protected function matchAgent(Node $node, Collection $agents, int $nodeCount): ?ShieldAgent
     {
         $fqdn = strtolower((string) $node->fqdn);
@@ -178,9 +151,6 @@ class HealthCheck
         return ($nodeCount === 1 && $agents->count() === 1) ? $agents->first() : null;
     }
 
-    /**
-     * @return array<int, string>
-     */
     protected function resolve(string $host): array
     {
         if ($host === '') {
@@ -198,7 +168,6 @@ class HealthCheck
         });
     }
 
-    /** @return array<string, mixed> */
     protected function item(string $key, string $label, string $level, string $detail, ?string $fix = null): array
     {
         return compact('key', 'label', 'level', 'detail', 'fix');

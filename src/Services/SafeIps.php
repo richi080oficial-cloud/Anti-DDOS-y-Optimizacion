@@ -7,23 +7,10 @@ use Pterodactyl\Extensions\AntiDDoS\Models\ShieldAgent;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldSetting;
 use Pterodactyl\Models\Node;
 
-/**
- * IPs que NUNCA deben bloquearse, y la razon por la que no se pueden bloquear.
- *
- * Es la red de seguridad contra falsos positivos: ni el escudo web, ni el firewall,
- * ni un bloqueo manual pueden cortar la propia infraestructura (nodos, panel,
- * agentes), la lista blanca, el rango privado o Cloudflare.
- */
 class SafeIps
 {
     protected const CACHE_KEY = 'antiddos:infra-ips';
 
-    /**
-     * IPs de la infraestructura: nodos de Pterodactyl (por su FQDN), IPs que
-     * informan los agentes y el servidor del panel. Cacheadas 10 minutos.
-     *
-     * @return array<int, string>
-     */
     public function infrastructure(): array
     {
         return Cache::remember(self::CACHE_KEY, 600, function () {
@@ -42,7 +29,6 @@ class SafeIps
                     }
                 }
             } catch (\Throwable $e) {
-                // Tablas aun sin migrar: se devuelve lo que haya.
             }
 
             $host = (string) parse_url((string) config('app.url'), PHP_URL_HOST);
@@ -68,9 +54,6 @@ class SafeIps
         Cache::forget(self::CACHE_KEY);
     }
 
-    /**
-     * Razon por la que la IP no se puede bloquear, o null si se puede.
-     */
     public function protectedReason(string $ip, ?string $requestIp = null): ?string
     {
         if (filter_var($ip, FILTER_VALIDATE_IP) === false) {
@@ -100,9 +83,6 @@ class SafeIps
         return null;
     }
 
-    /**
-     * @return array<int, string>
-     */
     protected function resolve(string $host): array
     {
         if ($host === '') {

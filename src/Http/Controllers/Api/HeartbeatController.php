@@ -7,10 +7,6 @@ use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use Pterodactyl\Extensions\AntiDDoS\Services\AgentRegistry;
 
-/**
- * Latido de los agentes de nodo que estan en OTRA maquina que el panel (los
- * locales lo envian con artisan). Autenticado con la clave de la API.
- */
 class HeartbeatController extends Controller
 {
     public function __construct(protected AgentRegistry $agents)

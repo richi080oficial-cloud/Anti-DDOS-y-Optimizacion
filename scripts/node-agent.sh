@@ -1,17 +1,4 @@
 #!/usr/bin/env bash
-#
-# Anti-DDoS y Optimización — agente de nodo (firewall anti-DDoS + ajustes del sistema)
-#
-# Se instala en CADA máquina que reciba tráfico de jugadores (nodos Wings) y,
-# si quieres, también en la del panel. No necesita el panel instalado ahí.
-#
-#   bash scripts/node-agent.sh install [--tcp=25565,25566] [--udp=19132] [--web=80,443]
-#                                      [--ssh=22] [--panel-url=https://panel.x.com] [--key=CLAVE]
-#   bash scripts/node-agent.sh uninstall
-#   bash scripts/node-agent.sh status
-#
-# Normalmente lo invoca el gestor: sudo antiddos node-install
-#
 set -Eeuo pipefail
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -74,7 +61,6 @@ detect_conflicts() {
 }
 
 ask() {
-    # ask "pregunta" "valor_por_defecto" -> imprime la respuesta
     local q="$1" def="$2" ans=""
     if [[ "$NO_PROMPT" == "1" || ! -t 0 ]]; then echo "$def"; return; fi
     read -r -p "$q [${def:-vacío}]: " ans || true
@@ -165,8 +151,6 @@ WantedBy=timers.target
 EOF
 }
 
-# Versiones anteriores instalaban un servicio "antiddos-tune" (THP, governor y
-# ajustes de sistema). Esa funcion se ha eliminado: se limpia si existe.
 remove_legacy_tune() {
     systemctl disable --now antiddos-tune.service >/dev/null 2>&1 || true
     rm -f "${UNIT_DIR}/antiddos-tune.service" /usr/local/sbin/antiddos-tune \
@@ -187,7 +171,6 @@ do_install() {
     mkdir -p "$CONF_DIR"
     tr -d '[:space:]' < "${SOURCE_DIR}/VERSION" > "${CONF_DIR}/version" 2>/dev/null || echo desconocida > "${CONF_DIR}/version"
 
-    # Panel en esta misma maquina: la lista de bloqueos se lee en local (sin clave).
     if [[ -z "$PANEL_LOCAL" && -z "$PANEL_URL" ]]; then
         local d
         for d in /var/www/pterodactyl /var/www/panel /var/www/html/pterodactyl /srv/pterodactyl; do
@@ -213,7 +196,6 @@ do_install() {
         [[ -n "$API_KEY"   ]] && "$SBIN_FW" set API_KEY   "$API_KEY"   >/dev/null
     fi
 
-    # Si SSH escucha en otro puerto, no lo bloqueamos por error.
     local ssh_detected
     ssh_detected="$(ss -Hltnp 2>/dev/null | awk '/sshd/ {n=split($4,a,":"); print a[n]; exit}' || true)"
     if [[ -n "$ssh_detected" && "$ssh_detected" != "22" ]] && grep -q '^SSH_PORT="22"' "$CONF"; then
@@ -246,7 +228,6 @@ do_uninstall() {
     systemctl daemon-reload
     rm -f "$SBIN_FW"
     rm -rf /var/lib/antiddos
-    # La configuración (puertos, clave, lista blanca) se conserva por si se reinstala.
     ok "Agente de nodo eliminado. Configuración conservada en ${CONF_DIR} (bórrala si no la quieres)."
 }
 
@@ -278,8 +259,6 @@ for arg in "$@"; do
     esac
 done
 
-# Los valores acaban en agent.conf, que el firewall carga como shell: solo se
-# admiten caracteres seguros.
 check_value() {
     local name="$1" value="$2" re="$3"
     [[ -z "$value" || "$value" =~ $re ]] || fail "Valor no válido para ${name}: '${value}'"

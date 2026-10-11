@@ -4,9 +4,6 @@ namespace Pterodactyl\Extensions\AntiDDoS\Models;
 
 use Illuminate\Database\Eloquent\Model;
 
-/**
- * Muestra de los contadores de un agente (una por minuto como maximo).
- */
 class ShieldMetric extends Model
 {
     public $timestamps = false;

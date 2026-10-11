@@ -10,54 +10,23 @@ use Pterodactyl\Extensions\AntiDDoS\Models\ShieldEvent;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldNetBlock;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldSetting;
 
-/**
- * Bloqueo de redes enteras: un operador (ASN) o un pais.
- *
- * Un atacante cambia de IP en segundos, pero no de operador: bloqueando todos
- * los rangos que anuncia su ASN se cortan tambien las IPs nuevas que coja.
- *
- * De donde salen los rangos (fuentes publicas, sin clave):
- *   - Operador: RIPEstat «announced-prefixes» (lo que el ASN ha anunciado en BGP
- *     en las ultimas 2 semanas, de cualquier region del mundo). Respaldo: whois de RADB.
- *   - Pais: RIPEstat «country-resource-list». Respaldo: ipdeny.com.
- * Solo IPv4 (el firewall de los nodos es IPv4). Los rangos se agregan (se unen los
- * contiguos) y se vuelven a descargar cada dia por si el operador anuncia otros.
- *
- * Donde se aplica:
- *   - Nodos: lineas «A <cidr>» del feed -> set vs_asn del firewall, que descarta todo
- *     lo que llega de esos rangos (a cualquier puerto) salvo la lista blanca.
- *   - Panel: ShieldGuard responde 403 sin tocar la BD (indice en cache troceado por /8).
- *
- * Red de seguridad: no se puede bloquear una red que contenga tu propia IP, la de
- * un nodo/el panel (seria el operador de tu propio servidor) o a Cloudflare.
- */
 class NetworkBlocks
 {
     protected const CUR_KEY = 'antiddos:netidx:cur';
     protected const VER_KEY = 'antiddos:netidx:ver';
     protected const FEED_KEY = 'antiddos:netfeed';
 
-    /** A partir de cuantas IPs (una /10) hay que confirmar el bloqueo. */
     public const BIG_IPS = 4194304;
 
-    /** Operadores que nunca se pueden bloquear: cortarian a todos los usuarios. */
     public const PROTECTED_ASNS = [
         13335 => 'Cloudflare',
         209242 => 'Cloudflare',
     ];
 
-    /** @var array{v: int, octets: array<int, bool>, next: int}|null indice cargado en esta peticion */
     protected ?array $cur = null;
 
-    /** @var array<int, array<string, array<int, mixed>>|null> trozos del indice cargados en esta peticion */
     protected array $buckets = [];
 
-    // ── Entrada ───────────────────────────────────────────────────────────────
-
-    /**
-     * Numero de ASN a partir de lo que pegue el usuario: «AS199585», «199585» o
-     * incluso «AS199585 · Operador / residencial». Null si no es un ASN publico.
-     */
     public static function parseAsn(string $input): ?int
     {
         if (!preg_match('/^\s*(?:AS\s*)?(\d{1,10})\b/i', $input, $m)) {
@@ -65,7 +34,6 @@ class NetworkBlocks
         }
 
         $n = (int) $m[1];
-        // 0, AS_TRANS, documentacion/privados/reservados (64496-131071) y privados de 32 bits.
         $reserved = $n === 0 || $n === 23456 || ($n >= 64496 && $n <= 131071) || $n >= 4200000000;
 
         return $reserved ? null : $n;
@@ -76,9 +44,6 @@ class NetworkBlocks
         return preg_match('/^\s*([A-Za-z]{2})\s*$/', $input, $m) ? strtoupper($m[1]) : null;
     }
 
-    /**
-     * @return array{0: string, 1: string} [tipo, valor normalizado]
-     */
     public function normalize(string $kind, string $input): array
     {
         if ($kind === 'asn') {
@@ -104,14 +69,6 @@ class NetworkBlocks
         throw new \DomainException('Tipo de bloqueo no válido (usa «asn» o «country»).');
     }
 
-    // ── Bloquear / desbloquear ────────────────────────────────────────────────
-
-    /**
-     * Bloquea un operador o un pais. $hours = null -> permanente.
-     *
-     * @throws \DomainException  si no se puede o no se debe bloquear
-     * @throws \RuntimeException si no se pudieron descargar sus rangos
-     */
     public function block(string $kind, string $input, ?int $hours, ?string $reason = null, ?int $userId = null, ?string $requestIp = null, bool $force = false): ShieldNetBlock
     {
         [$kind, $value] = $this->normalize($kind, $input);
@@ -178,7 +135,6 @@ class NetworkBlocks
         return true;
     }
 
-    /** @return Collection<int, ShieldNetBlock> */
     public function active(): Collection
     {
         try {
@@ -187,17 +143,10 @@ class NetworkBlocks
                 ->orderBy('kind')->orderBy('value')
                 ->get();
         } catch (\Throwable $e) {
-            // Tabla aun sin migrar.
             return collect();
         }
     }
 
-    /**
-     * Vuelve a descargar los rangos de los bloqueos activos (el operador puede
-     * anunciar rangos nuevos). Si una descarga falla se conservan los anteriores.
-     *
-     * @return array<string, string> etiqueta => resultado
-     */
     public function refresh(?int $id = null): array
     {
         $out = [];
@@ -233,7 +182,6 @@ class NetworkBlocks
         return $out;
     }
 
-    /** Borra los bloqueos caducados hace mas de un dia. */
     public function prune(): int
     {
         try {
@@ -255,13 +203,6 @@ class NetworkBlocks
         $this->buckets = [];
     }
 
-    // ── Lo que se envia a los nodos ───────────────────────────────────────────
-
-    /**
-     * Union de los rangos de todos los bloqueos activos, agregada (lineas «A» del feed).
-     *
-     * @return array<int, string>
-     */
     public function feedPrefixes(): array
     {
         $cached = Cache::get(self::FEED_KEY);
@@ -288,7 +229,6 @@ class NetworkBlocks
         return $prefixes;
     }
 
-    /** Expresion para una regla de Cloudflare (WAF) que bloquea lo mismo en el borde. */
     public function cloudflareExpression(): ?string
     {
         $active = $this->active();
@@ -307,19 +247,12 @@ class NetworkBlocks
         return $parts === [] ? null : implode(' or ', $parts);
     }
 
-    // ── Comprobacion rapida para el escudo web ────────────────────────────────
-
-    /**
-     * Si la IP pertenece a una red bloqueada devuelve su etiqueta; si no, null.
-     * Sin SQL en el camino normal: un GET de cache y, si el primer octeto tiene
-     * rangos bloqueados, otro GET con solo los rangos de ese /8.
-     */
     public function match(string $ip): ?string
     {
         $n = ip2long($ip);
 
         if ($n === false) {
-            return null; // IPv6: el bloqueo de redes es solo IPv4
+            return null;
         }
 
         $n &= 0xFFFFFFFF;
@@ -337,7 +270,6 @@ class NetworkBlocks
         $b = $this->buckets[$octet];
 
         if (!is_array($b)) {
-            // El trozo se perdio de la cache: se reconstruye en la siguiente peticion.
             Cache::forget(self::CUR_KEY);
 
             return null;
@@ -371,9 +303,6 @@ class NetworkBlocks
         return null;
     }
 
-    /**
-     * @return array{v: int, octets: array<int, bool>, next: int}
-     */
     protected function current(): array
     {
         $fresh = fn ($c) => is_array($c) && ($c['next'] === 0 || $c['next'] > time());
@@ -391,12 +320,6 @@ class NetworkBlocks
         return $this->cur = $cur;
     }
 
-    /**
-     * Reconstruye el indice: por cada /8 una lista ordenada de rangos con el maximo
-     * acumulado de los finales (misma busqueda binaria que ReputationLists).
-     *
-     * @return array{v: int, octets: array<int, bool>, next: int}
-     */
     protected function rebuild(): array
     {
         $version = (int) Cache::get(self::VER_KEY, 0) + 1;
@@ -442,11 +365,6 @@ class NetworkBlocks
         return $cur;
     }
 
-    // ── Descarga de rangos ────────────────────────────────────────────────────
-
-    /**
-     * @return array{prefixes: array<int, string>, name: string|null, source: string}
-     */
     public function resolve(string $kind, string $value): array
     {
         if ($kind === 'asn') {
@@ -482,7 +400,6 @@ class NetworkBlocks
         return ['prefixes' => self::toCidrs($ranges), 'name' => $name, 'source' => $source];
     }
 
-    /** @return array<int, string> */
     protected function ripeAnnounced(int $asn): array
     {
         try {
@@ -499,7 +416,6 @@ class NetworkBlocks
         }
     }
 
-    /** Respaldo: objetos «route» registrados en RADB para ese origen (whois, puerto 43). */
     protected function radb(int $asn): array
     {
         $fp = @fsockopen('whois.radb.net', 43, $errno, $errstr, 10);
@@ -546,7 +462,6 @@ class NetworkBlocks
         });
     }
 
-    /** @return array<int, string> */
     protected function ripeCountry(string $cc): array
     {
         try {
@@ -559,7 +474,6 @@ class NetworkBlocks
         }
     }
 
-    /** @return array<int, string> */
     protected function ipdeny(string $cc): array
     {
         try {
@@ -571,11 +485,6 @@ class NetworkBlocks
         }
     }
 
-    // ── Seguridad ─────────────────────────────────────────────────────────────
-
-    /**
-     * @param array<int, array{0: int, 1: int}> $ranges
-     */
     protected function safetyCheck(array $ranges, ?string $requestIp): void
     {
         $whitelist = IpMatcher::parseList((string) ShieldSetting::read('whitelist', ''));
@@ -601,26 +510,20 @@ class NetworkBlocks
         }
     }
 
-    // ── Aritmetica de rangos IPv4 (enteros de 64 bits) ────────────────────────
-
-    /**
-     * @param array<int, string> $cidrs
-     * @return array<int, array{0: int, 1: int}>
-     */
     public static function toRanges(array $cidrs): array
     {
         $out = [];
 
         foreach ($cidrs as $cidr) {
             if (!preg_match('#^(\d{1,3}(?:\.\d{1,3}){3})(?:/(\d{1,2}))?$#', trim((string) $cidr), $m)) {
-                continue; // IPv6 u otra cosa
+                continue;
             }
 
             $ip = ip2long($m[1]);
             $bits = isset($m[2]) && $m[2] !== '' ? (int) $m[2] : 32;
 
             if ($ip === false || $bits > 32 || $bits < 1) {
-                continue; // nunca se acepta 0.0.0.0/0
+                continue;
             }
 
             $mask = (0xFFFFFFFF << (32 - $bits)) & 0xFFFFFFFF;
@@ -631,12 +534,6 @@ class NetworkBlocks
         return $out;
     }
 
-    /**
-     * Ordena y une los rangos que se solapan o se tocan.
-     *
-     * @param array<int, array{0: int, 1: int}> $ranges
-     * @return array<int, array{0: int, 1: int}>
-     */
     public static function aggregate(array $ranges): array
     {
         usort($ranges, fn (array $a, array $b) => $a[0] <=> $b[0]);
@@ -655,20 +552,12 @@ class NetworkBlocks
         return $out;
     }
 
-    /**
-     * Convierte rangos en la lista minima de bloques CIDR, como mucho de /8 (el
-     * agente de nodo rechaza por seguridad cualquier bloque mas grande).
-     *
-     * @param array<int, array{0: int, 1: int}> $ranges
-     * @return array<int, string>
-     */
     public static function toCidrs(array $ranges): array
     {
         $out = [];
 
         foreach ($ranges as [$s, $e]) {
             while ($s <= $e) {
-                // Bloque mas grande alineado en $s que no se pasa de $e (maximo una /8).
                 $size = min(1 << 24, $s === 0 ? 1 << 32 : ($s & -$s));
 
                 while ($s + $size - 1 > $e) {
@@ -689,13 +578,11 @@ class NetworkBlocks
         return $out;
     }
 
-    /** @param array<int, array{0: int, 1: int}> $ranges */
     public static function countIps(array $ranges): int
     {
         return array_sum(array_map(fn (array $r) => $r[1] - $r[0] + 1, $ranges));
     }
 
-    /** @param array<int, array{0: int, 1: int}> $ranges */
     public static function rangesContain(array $ranges, string $ip): bool
     {
         $n = ip2long($ip);

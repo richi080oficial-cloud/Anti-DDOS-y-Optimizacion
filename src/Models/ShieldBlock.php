@@ -4,9 +4,6 @@ namespace Pterodactyl\Extensions\AntiDDoS\Models;
 
 use Illuminate\Database\Eloquent\Model;
 
-/**
- * IP bloqueada por el escudo del panel. expires_at = null significa permanente.
- */
 class ShieldBlock extends Model
 {
     protected $table = 'antiddos_blocks';

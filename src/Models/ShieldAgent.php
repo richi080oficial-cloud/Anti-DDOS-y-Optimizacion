@@ -4,10 +4,6 @@ namespace Pterodactyl\Extensions\AntiDDoS\Models;
 
 use Illuminate\Database\Eloquent\Model;
 
-/**
- * Agente de nodo (firewall) que ha informado al panel. Se crea/actualiza con
- * cada latido (cada ~30 s); si deja de llegar, el panel lo marca como caido.
- */
 class ShieldAgent extends Model
 {
     protected $table = 'antiddos_agents';
@@ -20,7 +16,6 @@ class ShieldAgent extends Model
         'last_seen_at' => 'datetime',
     ];
 
-    /** Segundos sin latido tras los cuales se considera desconectado. */
     public const STALE_AFTER = 150;
 
     public function isOnline(): bool

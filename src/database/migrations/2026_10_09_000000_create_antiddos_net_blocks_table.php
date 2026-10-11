@@ -12,17 +12,16 @@ return new class extends Migration
             return;
         }
 
-        // Redes enteras bloqueadas: un operador (ASN) o un pais, con sus rangos IPv4.
         Schema::create('antiddos_net_blocks', function (Blueprint $table) {
             $table->increments('id');
-            $table->string('kind', 8);               // asn | country
-            $table->string('value', 16);             // 199585 | PL
-            $table->string('name')->nullable();      // titular del ASN o nombre del pais
+            $table->string('kind', 8);
+            $table->string('value', 16);
+            $table->string('name')->nullable();
             $table->string('reason')->nullable();
-            $table->longText('prefixes')->nullable(); // JSON: rangos CIDR IPv4 ya agregados
+            $table->longText('prefixes')->nullable();
             $table->unsignedInteger('prefix_count')->default(0);
             $table->unsignedBigInteger('ip_count')->default(0);
-            $table->string('source', 16)->nullable(); // de donde salieron los rangos
+            $table->string('source', 16)->nullable();
             $table->unsignedInteger('user_id')->nullable();
             $table->timestamp('expires_at')->nullable()->index();
             $table->timestamp('refreshed_at')->nullable();

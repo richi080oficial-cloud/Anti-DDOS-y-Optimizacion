@@ -13,7 +13,6 @@ return new class extends Migration
                 $table->bigIncrements('id');
                 $table->string('host', 120);
                 $table->timestamp('recorded_at')->useCurrent();
-                // Contadores acumulados del firewall (se reinician al reaplicar las reglas).
                 $table->unsignedBigInteger('dropped')->default(0);
                 $table->unsignedBigInteger('syn')->default(0);
                 $table->unsignedBigInteger('tcp_pkts')->default(0);

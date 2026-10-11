@@ -5,21 +5,8 @@ namespace Pterodactyl\Extensions\AntiDDoS\Services;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 
-/**
- * Listas publicas de reputacion de IPs (solo IPv4), descargadas una vez al dia y
- * guardadas en la cache del panel como rangos ordenados para buscar rapido.
- *
- * Fuentes (gratuitas y publicas):
- *   - Blocklist.de: IPs que han atacado servidores en las ultimas horas.
- *   - Spamhaus DROP: bloques de red secuestrados o controlados por criminales.
- *   - FireHOL Level 1: agregado de listas de atacantes confirmados (sin falsos positivos
- *     conocidos: es la lista pensada para bloquear sin riesgo).
- *   - CINS Army: IPs con actividad maliciosa detectada por sensores.
- *   - Tor: nodos de salida (no es un ataque por si mismo; se marca como «anonimizador»).
- */
 class ReputationLists
 {
-    /** id => [nombre, url, tipo: attack|anonymizer] */
     public const SOURCES = [
         'blocklist_de' => ['Blocklist.de (ataques recientes)', 'https://lists.blocklist.de/lists/all.txt', 'attack'],
         'spamhaus_drop' => ['Spamhaus DROP (redes de criminales)', 'https://www.spamhaus.org/drop/drop.txt', 'attack'],
@@ -28,17 +15,10 @@ class ReputationLists
         'tor' => ['Tor (nodo de salida)', 'https://check.torproject.org/torbulkexitlist', 'anonymizer'],
     ];
 
-    protected const TTL = 60 * 60 * 24 * 3;   // se conservan 3 dias si la descarga siguiente falla
+    protected const TTL = 60 * 60 * 24 * 3;
 
-    /** @var array<string, array<string, mixed>|false> listas ya leidas de la cache en este proceso */
     protected static array $loaded = [];
 
-    /**
-     * Descarga todas las listas. Cada una es independiente: un fallo no borra la
-     * copia anterior.
-     *
-     * @return array<string, array{ok: bool, count: int, error: string|null}>
-     */
     public function refresh(): array
     {
         $out = [];
@@ -71,11 +51,6 @@ class ReputationLists
         return $out;
     }
 
-    /**
-     * Listas en las que aparece la IP: id => nombre.
-     *
-     * @return array<string, array{name: string, kind: string}>
-     */
     public function match(string $ip): array
     {
         $n = ip2long($ip);
@@ -88,7 +63,6 @@ class ReputationLists
         $found = [];
 
         foreach (self::SOURCES as $id => [$name, , $kind]) {
-            // Cada lista ocupa varios MB: se lee de la cache una sola vez por proceso.
             $data = self::$loaded[$id] ??= Cache::get("antiddos:rep:{$id}") ?? false;
 
             if (is_array($data) && $this->contains($data, $n)) {
@@ -99,11 +73,6 @@ class ReputationLists
         return $found;
     }
 
-    /**
-     * Estado de cada lista para mostrarlo en el admin.
-     *
-     * @return array<string, array{name: string, loaded: bool, count: int, updated_at: int|null}>
-     */
     public function status(): array
     {
         $out = [];
@@ -121,11 +90,6 @@ class ReputationLists
         return $out;
     }
 
-    /**
-     * Resumen pequeno de una lista (fecha y entradas) sin cargar la lista entera.
-     *
-     * @return array{at: int|null, count: int}|null
-     */
     protected function meta(string $id): ?array
     {
         $meta = Cache::get("antiddos:rep:meta:{$id}");
@@ -134,7 +98,6 @@ class ReputationLists
             return $meta;
         }
 
-        // Listas descargadas por una version anterior (sin resumen): se crea una vez.
         $data = Cache::get("antiddos:rep:{$id}");
 
         if (!is_array($data)) {
@@ -152,9 +115,6 @@ class ReputationLists
         return collect($this->status())->contains('loaded', true);
     }
 
-    /**
-     * @return array<int, array{0: int, 1: int}> rangos [inicio, fin] IPv4
-     */
     protected function parse(string $body): array
     {
         $ranges = [];
@@ -188,14 +148,6 @@ class ReputationLists
         return $ranges;
     }
 
-    /**
-     * Ordena por inicio y precalcula el maximo acumulado de los finales: asi un
-     * punto esta en algun rango si el maximo final de los rangos que empiezan
-     * antes o en el es >= que el.
-     *
-     * @param array<int, array{0: int, 1: int}> $ranges
-     * @return array{starts: array<int, int>, pmax: array<int, int>}
-     */
     protected function index(array $ranges): array
     {
         usort($ranges, fn (array $a, array $b) => $a[0] <=> $b[0]);
@@ -213,9 +165,6 @@ class ReputationLists
         return ['starts' => $starts, 'pmax' => $pmax];
     }
 
-    /**
-     * @param array{starts: array<int, int>, pmax: array<int, int>} $data
-     */
     protected function contains(array $data, int $n): bool
     {
         $lo = 0;

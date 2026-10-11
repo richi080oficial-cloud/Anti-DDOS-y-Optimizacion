@@ -10,25 +10,10 @@ use Pterodactyl\Models\Allocation;
 use Pterodactyl\Models\Egg;
 use Pterodactyl\Models\Server;
 
-/**
- * Deduce que puertos hay que proteger a partir de los servidores del panel.
- *
- * Funciona asi:
- *   1. Se eligen los eggs que cuentan como Minecraft: los que el admin marque
- *      o, si no ha marcado ninguno, los que se reconocen por su nombre
- *      (Paper, Spigot, Forge, Bedrock, BungeeCord, Velocity...).
- *   2. De cada servidor de esos eggs se toma su puerto principal. Los eggs de
- *      Bedrock/PocketMine/Nukkit/Geyser van a UDP; el resto, a TCP.
- *   3. Si la opcion «puertos adicionales» esta activa, tambien se protegen las
- *      demas asignaciones del servidor (Dynmap, voice chat, query...) en TCP y UDP.
- *   4. Todo se une a los puertos manuales y se compacta en rangos para respetar
- *      el limite de 15 entradas de iptables multiport (un rango cuenta como 2).
- */
 class MinecraftPorts
 {
     public const CACHE_KEY = 'antiddos:mcports';
 
-    /** Entradas maximas de iptables multiport (un rango cuenta como 2). */
     public const MAX_WEIGHT = 15;
 
     protected const JAVA_HINTS = [
@@ -38,7 +23,6 @@ class MinecraftPorts
 
     protected const BEDROCK_HINTS = ['bedrock', 'pocketmine', 'nukkit', 'geyser', 'cloudburst', 'pmmp'];
 
-    /** ¿El nombre del egg/nest parece de Minecraft? */
     public function looksLikeMinecraft(?string $eggName, ?string $nestName = null): bool
     {
         $text = Str::lower(trim($eggName . ' ' . $nestName));
@@ -65,11 +49,6 @@ class MinecraftPorts
         return false;
     }
 
-    /**
-     * Todos los eggs del panel con su estado de deteccion.
-     *
-     * @return Collection<int, array{id: int, name: string, nest: string, detected: bool, selected: bool, bedrock: bool, servers: int}>
-     */
     public function eggs(): Collection
     {
         $chosen = $this->chosenEggIds();
@@ -91,7 +70,6 @@ class MinecraftPorts
         });
     }
 
-    /** IDs elegidos a mano por el admin; null = deteccion automatica por nombre. */
     public function chosenEggIds(): ?array
     {
         $raw = trim((string) ShieldSetting::read('fw_egg_ids', ''));
@@ -103,12 +81,6 @@ class MinecraftPorts
         return array_values(array_filter(array_map('intval', explode(',', $raw))));
     }
 
-    /**
-     * Calcula los puertos a proteger. Resultado cacheado 30 s (los agentes lo
-     * piden cada 30 s) y limpiado al guardar la configuracion.
-     *
-     * @return array{tcp: string, udp: string, auto_tcp: string, auto_udp: string, servers: int, details: array<int, array<string, mixed>>}
-     */
     public function plan(): array
     {
         return Cache::remember(self::CACHE_KEY, 30, fn () => $this->compute());
@@ -119,9 +91,6 @@ class MinecraftPorts
         Cache::forget(self::CACHE_KEY);
     }
 
-    /**
-     * @return array{tcp: string, udp: string, auto_tcp: string, auto_udp: string, servers: int, details: array<int, array<string, mixed>>}
-     */
     protected function compute(): array
     {
         $settings = ShieldSetting::snapshot();
@@ -185,11 +154,6 @@ class MinecraftPorts
         ];
     }
 
-    /**
-     * «25565,25570:25575» -> [[25565,25565],[25570,25575]]
-     *
-     * @return array<int, array{0: int, 1: int}>
-     */
     public function parse(string $list): array
     {
         $out = [];
@@ -208,13 +172,6 @@ class MinecraftPorts
         return $out;
     }
 
-    /**
-     * Une rangos solapados o contiguos y, si aun superan el limite de iptables,
-     * fusiona los que tienen menos hueco entre si (se protegen unos pocos
-     * puertos de mas, nunca de menos).
-     *
-     * @param array<int, array{0: int, 1: int}> $ranges
-     */
     public function compact(array $ranges): string
     {
         if ($ranges === []) {

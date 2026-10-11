@@ -2,12 +2,8 @@
 
 namespace Pterodactyl\Extensions\AntiDDoS\Services;
 
-/**
- * Utilidades para IPs y rangos CIDR (IPv4 e IPv6).
- */
 final class IpMatcher
 {
-    /** Valida una IP suelta o un rango CIDR (1.2.3.4, 10.0.0.0/8, 2001:db8::/32). */
     public static function valid(string $value): bool
     {
         $value = trim($value);
@@ -31,7 +27,6 @@ final class IpMatcher
         return (int) $bits <= strlen($bin) * 8;
     }
 
-    /** True si la IP coincide con la regla (IP exacta o CIDR). */
     public static function matches(string $ip, string $rule): bool
     {
         $ipBin = @inet_pton($ip);
@@ -72,9 +67,6 @@ final class IpMatcher
         return (ord($ipBin[$fullBytes]) & $mask) === (ord($netBin[$fullBytes]) & $mask);
     }
 
-    /**
-     * @param array<int, string> $rules
-     */
     public static function inList(string $ip, array $rules): bool
     {
         foreach ($rules as $rule) {
@@ -86,12 +78,6 @@ final class IpMatcher
         return false;
     }
 
-    /**
-     * Convierte un texto (una entrada por linea, # para comentarios) en una
-     * lista de reglas validas.
-     *
-     * @return array<int, string>
-     */
     public static function parseList(string $text): array
     {
         $out = [];
@@ -107,24 +93,17 @@ final class IpMatcher
         return array_values(array_unique($out));
     }
 
-    /** Rangos IPv4 publicados por Cloudflare (https://www.cloudflare.com/ips-v4). */
     public const CLOUDFLARE_V4 = [
         '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22', '141.101.64.0/18',
         '108.162.192.0/18', '190.93.240.0/20', '188.114.96.0/20', '197.234.240.0/22', '198.41.128.0/17',
         '162.158.0.0/15', '104.16.0.0/13', '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22',
     ];
 
-    /**
-     * True si la IP es de un servidor de Cloudflare. Si el panel ve una de estas
-     * como IP del visitante es que TRUSTED_PROXIES no esta configurado: la IP no
-     * es la del usuario real y no se puede limitar ni bloquear por ella.
-     */
     public static function isCloudflare(string $ip): bool
     {
         return self::inList($ip, self::CLOUDFLARE_V4);
     }
 
-    /** IP privada, de loopback o reservada: nunca se bloquea desde el panel. */
     public static function isInternal(string $ip): bool
     {
         return filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false;

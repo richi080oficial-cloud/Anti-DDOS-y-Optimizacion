@@ -1,21 +1,4 @@
 #!/usr/bin/env bash
-#
-# Anti-DDoS y Optimización — limites de peticiones a nivel de nginx (capa 7 del panel)
-#
-#   nginx-shield.sh on [--rate=20] [--burst=100] [--conn=50] [--force]
-#   nginx-shield.sh off
-#   nginx-shield.sh status
-#
-# Crea /etc/nginx/conf.d/antiddos.conf con limit_req/limit_conn A NIVEL http,
-# asi se aplican a todos los server{} que no los definan por su cuenta. nginx
-# corta el exceso antes de que llegue a PHP, que es lo que realmente tumba un
-# panel bajo un ataque HTTP. Antes de recargar se valida con `nginx -t` y, si
-# falla, se deshace solo.
-#
-# OJO con Cloudflare / proxys: si el panel esta detras de uno, nginx solo ve la
-# IP del proxy y limitaria a TODOS los usuarios a la vez. Configura antes
-# set_real_ip_from + real_ip_header (nginx) o usa --force bajo tu responsabilidad.
-#
 set -uo pipefail
 
 CONF_FILE="/etc/nginx/conf.d/antiddos.conf"

@@ -1,6 +1,6 @@
 # Anti-DDoS y Optimización para Pterodactyl — MEMORIA DEL PROYECTO
 
-> **Lee este archivo entero antes de tocar nada.** Resume el proyecto, cómo trabaja el usuario, la arquitectura, las trampas ya conocidas y todo lo hecho en la sesión que lo creó. Versión actual del código: **1.13.1** (`VERSION`). Rama de trabajo: **`main`** (única).
+> **Lee este archivo entero antes de tocar nada.** Resume el proyecto, cómo trabaja el usuario, la arquitectura, las trampas ya conocidas y todo lo hecho en la sesión que lo creó. Versión actual del código: **1.13.5** (`VERSION`). Rama de trabajo: **`main`** (única).
 
 ---
 
@@ -138,7 +138,7 @@ Artisan: `php artisan antiddos:manage info|apikey|purge|prune|feed|heartbeat|ip|
 
 ## 6. Convenciones de código
 
-- Comentarios y textos de UI en **español**; identificadores en inglés/español técnico existente. Imita el estilo del archivo que tocas (PHP: `declare` no se usa en servicios; docblocks `@param array<...>`).
+- **El código NO lleva comentarios** (el usuario pidió quitarlos todos en 1.13.5; no los vuelvas a añadir salvo que los pida). Textos de UI en **español**; identificadores en inglés/español técnico existente. Imita el estilo del archivo que tocas (PHP: `declare` no se usa en servicios; docblocks `@param array<...>`).
 - **Tema-agnóstico**: la UI hereda colores del tema del panel (sin fondos fijos); CSS bajo `.ad`, variables `--ok/--warn/--err/--pri/--line`. Sin librerías externas (gráfica en `<canvas>` propio).
 - Cada cambio funcional: **subir `VERSION` y `extension.json` a la vez**, actualizar `README.md`, commit en español descriptivo con `Co-Authored-By`, `git push origin main`.
 - Siempre sanear datos que vienen de agentes (`AgentRegistry`, `LiveTraffic::normalize`); todo valor que acaba en `agent.conf` se valida con regex (se carga como shell).
@@ -212,6 +212,8 @@ sudo antiddos status ; systemctl is-active antiddos-live
 | 1.12.0 | Petición: «diferenciar entre usuarios que hacen cosas en el panel (muchas peticiones) y ataques». El escudo trataba a todos igual por IP y corre antes de la sesión, así que un admin/cliente con consola, archivos y varias pestañas —o una oficina con una IP— podía acabar bloqueado. Nuevo `PanelIdentity` (ver §4.2) + ajuste `user_limit` (1500/min por usuario con sesión/clave, campo nuevo en «Escudo web»). Anónimos sin cambios. Verificado solo con sintaxis; no probado en servidor real. |
 | 1.13.0 | (otra sesión) Entrada del menú de administración oculta por defecto, con interruptor propio. |
 | 1.13.1 | Usuario: «primero me sale sin datos y cuando le doy a intentar otra vez sí». Causa: un solo fallo de un servicio de origen lo dejaba en pausa **5 min** y el resultado fallido se guardaba **2 min**; «Reintentar» funcionaba porque borra las pausas. Arreglo en `IpIntel`: pausas de 90 s (límite 429/403) o 20 s (error puntual) con `cool()`; `tryGeo()`; si nadie responde se prueban igualmente 2 servicios en pausa; RIPEstat con 1 reintento; `TTL_FAIL` 15 s; la marca de «en cola» se libera al acabar la consulta (antes bloqueaba reintentos 90 s). Solo sintaxis verificada; no probado en servidor real. |
+| 1.13.2–1.13.4 | (otra sesión) Comprobación de espacio en disco antes de instalar/actualizar y limpieza de `/opt/antiddos` al terminar (queda solo el kit mínimo del desinstalador). |
+| 1.13.5 | Petición: «de cada archivo revísalo entero y borra sus comentarios». Quitados todos los comentarios de PHP (~400, con el tokenizador de `php-parser`; mismo árbol de sintaxis antes/después), Blade (23: `{{-- --}}`, CSS y JS; mismos 8.482 tokens de JS) y bash (~190; lector con pila para comillas, `$( )`, `${ }` y heredocs). Se **conservan** las directivas `# shellcheck`, el `#!` y el texto que los scripts *escriben* en archivos generados (`agent.conf`, sysctl, nginx) y un comentario de `awk` dentro de una cadena. Markdown y JSON intactos. Sin cambios de comportamiento. |
 Decisiones del usuario a recordar: quitar la optimización; una sola rama; el nombre se queda; quería ver **por qué** se bloquea cada cosa y evitar bloqueos sin sentido; quiere datos **precisos y veraces** en la gráfica.
 
 ---

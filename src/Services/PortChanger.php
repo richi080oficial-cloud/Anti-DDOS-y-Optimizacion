@@ -10,25 +10,12 @@ use Pterodactyl\Models\Server;
 use Pterodactyl\Repositories\Wings\DaemonPowerRepository;
 use Pterodactyl\Repositories\Wings\DaemonServerRepository;
 
-/**
- * Cambia el puerto principal de un servidor moviendo su asignacion (allocation).
- *
- * Funciona como lo hace el panel en «Build Configuration»: el servidor pasa a
- * apuntar a otra asignacion de la misma IP y nodo, la antigua queda libre y se
- * avisa a Wings. Si la asignacion nueva no existe, se crea. El cambio de puerto
- * solo surte efecto al reiniciar el servidor (Docker fija los puertos al crear
- * el contenedor), por eso hay opcion de reinicio.
- */
 class PortChanger
 {
     public function __construct(protected PortAdvisor $advisor)
     {
     }
 
-    /**
-     * Puerto recomendado y libre para el servidor: primero una asignacion libre
-     * ya existente en el rango seguro; si no hay, uno aleatorio sin usar.
-     */
     public function suggest(Server $server, array $exclude = [], int $min = PortAdvisor::SAFE_MIN, int $max = PortAdvisor::SAFE_MAX): ?int
     {
         $min = max(1024, min($min, $max));
@@ -65,9 +52,6 @@ class PortChanger
         return null;
     }
 
-    /**
-     * @return array{ok: array<int, string>, warn: array<int, string>}
-     */
     public function change(Server $server, int $port, bool $restart = false, ?int $userId = null): array
     {
         $report = ['ok' => [], 'warn' => []];
@@ -113,7 +97,6 @@ class PortChanger
 
             $server->forceFill(['allocation_id' => $new->id])->save();
 
-            // La antigua queda libre para reutilizarla.
             $old->forceFill(['server_id' => null])->save();
         });
 
@@ -141,7 +124,6 @@ class PortChanger
         return $report;
     }
 
-    /** Devuelve un mensaje de error si el puerto no se puede usar. */
     public function validate(int $port, Allocation $current): ?string
     {
         if ($port < 1024 || $port > 65535) {
@@ -155,7 +137,6 @@ class PortChanger
         return null;
     }
 
-    /** @return array<int, int> */
     protected function reserved(int $nodeId): array
     {
         $node = Node::query()->find($nodeId, ['id', 'daemonListen', 'daemonSFTP']);
@@ -163,9 +144,6 @@ class PortChanger
         return $node === null ? [] : [(int) $node->daemonListen, (int) $node->daemonSFTP];
     }
 
-    /**
-     * @param array{ok: array<int, string>, warn: array<int, string>} $report
-     */
     protected function restartIfRunning(Server $server, array &$report): void
     {
         try {

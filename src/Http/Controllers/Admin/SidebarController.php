@@ -8,10 +8,6 @@ use Illuminate\Routing\Controller;
 use Prologue\Alerts\Facades\Alert;
 use Pterodactyl\Extensions\AntiDDoS\Support\Sidebar;
 
-/**
- * Interruptor «Mostrar Anti-DDoS y Optimización en el menu lateral» de su pagina de ajustes.
- * La ruta ya cuelga de los middlewares del admin (sesion, 2FA y solo administradores).
- */
 class SidebarController extends Controller
 {
     public function __invoke(Request $request): RedirectResponse

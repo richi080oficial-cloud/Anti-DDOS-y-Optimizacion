@@ -47,7 +47,6 @@ class AdminController extends Controller
     ) {
     }
 
-    /** Vuelve a la pantalla de admin abriendo una pestana concreta (#ancla). */
     protected function tab(string $tab): RedirectResponse
     {
         return redirect(route('admin.extensions.antiddos.index') . '#' . $tab);
@@ -113,14 +112,6 @@ class AdminController extends Controller
             ->with('antiddos:success', 'Configuración guardada.');
     }
 
-    /**
-     * Valores del firewall a mostrar: lo guardado en el panel; si aun no se ha
-     * configurado nada desde aqui, lo que informa el primer agente conectado.
-     *
-     * @param array<string, mixed> $settings
-     * @param \Illuminate\Support\Collection<int, \Pterodactyl\Extensions\AntiDDoS\Models\ShieldAgent> $agents
-     * @return array<string, mixed>
-     */
     protected function firewallValues(array $settings, $agents): array
     {
         $reported = $agents->first(fn ($a) => $a->isOnline())?->payload ?? [];
@@ -149,10 +140,6 @@ class AdminController extends Controller
         ];
     }
 
-    /**
-     * Valida una lista de puertos «25565,25570:25600» (el firewall admite 15
-     * entradas de multiport; un rango cuenta como 2).
-     */
     protected function portList(?string $value, string $label): ?string
     {
         $value = preg_replace('/\s+/', '', (string) $value) ?? '';
@@ -185,13 +172,6 @@ class AdminController extends Controller
         return $value;
     }
 
-    /**
-     * Servidores de Minecraft con la valoracion de su puerto principal.
-     *
-     * @param array<string, mixed> $fw
-     * @param array{tcp: string, udp: string} $plan
-     * @return array{rows: array<int, array<string, mixed>>, counts: array<string, int>}
-     */
     protected function portRows(array $fw, array $plan): array
     {
         $counts = ['error' => 0, 'warn' => 0, 'ok' => 0];
@@ -249,7 +229,6 @@ class AdminController extends Controller
         return ['rows' => $rows, 'counts' => $counts];
     }
 
-    /** Datos de las graficas de trafico (JSON, los pide el navegador cada segundo en vivo). */
     public function trafficData(Request $request): JsonResponse
     {
         $data = $request->validate([
@@ -266,8 +245,6 @@ class AdminController extends Controller
             ? $this->live->series($host, $view)
             : $this->metrics->series($range, $host, $view);
 
-        // Las tablas de IPs cambian cada ~30 s (latido del agente): se recalculan como mucho
-        // cada 3 s aunque la gráfica se pida cada segundo.
         $tables = Cache::remember('antiddos:tables:' . md5($host . '|' . $request->ip()), 3, fn () => [
             'top' => $this->topIps($host, $request->ip()),
             'fw_bans' => $this->firewallBans($host, $request->ip()),
@@ -279,12 +256,6 @@ class AdminController extends Controller
         return (new JsonResponse($response))->header('Cache-Control', 'no-store');
     }
 
-    /**
-     * IPs con mas conexiones ahora (de los agentes), sumando nodos, con su origen y
-     * veredicto de reputacion (de la cache: nunca espera a servicios externos).
-     *
-     * @return array<int, array<string, mixed>>
-     */
     protected function topIps(?string $host, ?string $requestIp = null): array
     {
         $totals = [];
@@ -299,8 +270,6 @@ class AdminController extends Controller
             }
         }
 
-        // Las IPs de tus propios nodos y del panel no son visitantes (p. ej. Wings hablando con los
-        // servidores por la IP publica): se omiten de la lista.
         foreach (array_keys($totals) as $ip) {
             if ($this->safe->isInfrastructure((string) $ip)) {
                 unset($totals[$ip]);
@@ -326,11 +295,6 @@ class AdminController extends Controller
         return $out;
     }
 
-    /**
-     * Bloqueos activos del firewall de los nodos, con motivo, tiempo restante y veredicto.
-     *
-     * @return array<int, array<string, mixed>>
-     */
     protected function firewallBans(?string $host, ?string $requestIp = null): array
     {
         $rows = [];
@@ -359,7 +323,6 @@ class AdminController extends Controller
         return $out;
     }
 
-    /** Cambia el puerto de un servidor (el indicado o uno recomendado al azar). */
     public function changePort(Request $request): RedirectResponse
     {
         $data = $request->validate([
@@ -383,7 +346,6 @@ class AdminController extends Controller
         return $this->portReport([$server->name => $report], 1);
     }
 
-    /** Cambia a un puerto recomendado (aleatorio y libre) los servidores marcados. */
     public function autoPorts(Request $request): RedirectResponse
     {
         $data = $request->validate([
@@ -422,9 +384,6 @@ class AdminController extends Controller
         return $this->portReport($reports, count($ids));
     }
 
-    /**
-     * @param array<string, array{ok: array<int, string>, warn: array<int, string>}> $reports
-     */
     protected function portReport(array $reports, int $total): RedirectResponse
     {
         $lines = [];
@@ -470,8 +429,6 @@ class AdminController extends Controller
             return $this->tab('shield')->with('antiddos:error', 'Indica al menos un puerto TCP, o activa la detección automática de servidores de Minecraft.');
         }
 
-        // Eggs que cuentan como Minecraft: si coinciden con los detectados por nombre,
-        // se guarda vacio (asi los eggs nuevos se reconocen solos).
         $eggsValue = '';
 
         if ($request->has('eggs_present')) {
@@ -542,7 +499,6 @@ class AdminController extends Controller
             ->with('antiddos:success', "IP {$data['ip']} bloqueada. Los nodos la recibirán en menos de un minuto.");
     }
 
-    /** Bloquea un operador entero (ASN) o un pais: tambien sus IPs futuras. */
     public function blockNetwork(Request $request): RedirectResponse
     {
         $data = $request->validate([
@@ -589,7 +545,6 @@ class AdminController extends Controller
             : 'No estaba bloqueado.');
     }
 
-    /** Vuelve a descargar los rangos de los operadores/paises bloqueados. */
     public function refreshNetworks(): RedirectResponse
     {
         @set_time_limit(180);
@@ -604,7 +559,6 @@ class AdminController extends Controller
         return $this->tab('asn')->with('antiddos:success', $lines === [] ? 'No hay redes bloqueadas.' : 'Rangos actualizados — ' . implode(' · ', $lines));
     }
 
-    /** Añade una IP a la lista blanca (y la desbloquea): para corregir un falso positivo. */
     public function whitelistIp(Request $request): RedirectResponse
     {
         $data = $request->validate(['ip' => 'required|ip']);
@@ -623,7 +577,6 @@ class AdminController extends Controller
         return $this->tab('status')->with('antiddos:success', "{$data['ip']} añadida a la lista blanca: ya no se bloqueará (se aplica a los nodos en menos de un minuto).");
     }
 
-    /** Politica de bloqueo de los nodos: monitor | balanced | strict. */
     public function updatePolicy(Request $request): RedirectResponse
     {
         $data = $request->validate(['ban_mode' => 'required|in:monitor,balanced,strict']);
@@ -634,7 +587,6 @@ class AdminController extends Controller
         return $this->tab('shield')->with('antiddos:success', 'Política de bloqueo guardada. Los nodos la aplican en menos de un minuto.');
     }
 
-    /** Consulta de origen y reputacion: activar/desactivar y clave opcional de AbuseIPDB. */
     public function updateIntel(Request $request): RedirectResponse
     {
         $data = $request->validate([
@@ -657,7 +609,6 @@ class AdminController extends Controller
         return $this->tab('shield')->with('antiddos:success', 'Configuración de origen y reputación guardada.' . ($request->boolean('auto_block_malicious') && $request->boolean('intel_enabled') ? ' Bloqueo automático de IPs maliciosas ACTIVADO (' . app(AutoBlocker::class)->durationLabel() . ').' : ''));
     }
 
-    /** Repite la consulta de origen y reputacion de una IP. */
     public function recheckIp(Request $request): RedirectResponse
     {
         $data = $request->validate(['ip' => 'required|ip']);
@@ -673,7 +624,6 @@ class AdminController extends Controller
         );
     }
 
-    /** Descarga ya las listas publicas de reputacion. */
     public function refreshLists(): RedirectResponse
     {
         @set_time_limit(120);

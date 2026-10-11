@@ -1,21 +1,8 @@
 #!/usr/bin/env bash
-#
-# Anti-DDoS y Optimización — gestor (instalar / actualizar / desinstalar / estado / anti-DDoS)
-# Autor: Vexa Studio · Licencia: MIT
-#
-#   PANEL:  bash <(curl -sSL .../install.sh) install
-#   NODO:   bash <(curl -sSL .../install.sh) node-install
-#   sudo antiddos update
-#   sudo antiddos attack-on
-#   sudo antiddos ban 1.2.3.4
-#   sudo antiddos uninstall --drop-data
-#
 set -Eeuo pipefail
 
 REPO_BRANCH="${REPO_BRANCH:-main}"
 SRC_DIR="${SRC_DIR:-/opt/antiddos}"
-# Si el codigo ya esta clonado (p. ej. por SSH con una deploy key en un repo
-# privado) se conserva su "origin" en vez de volver a la URL https publica.
 if [[ -z "${REPO_URL:-}" && -z "${ANTIDDOS_REPO:-}" && -d "$SRC_DIR/.git" ]]; then
     REPO_URL="$(git -C "$SRC_DIR" remote get-url origin 2>/dev/null || true)"
 fi
@@ -35,7 +22,7 @@ WEB_USER="${WEB_USER:-}"
 FORCE="${FORCE:-0}"
 DROP_DATA="${DROP_DATA:-0}"
 API_KEY=""
-PASSTHRU=()      # opciones sin reconocer: se pasan tal cual a los scripts hijos
+PASSTHRU=()
 
 if [ -t 1 ]; then
     RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'
@@ -53,7 +40,6 @@ trap 'fail "El gestor se detuvo en la línea $LINENO."' ERR
 
 [[ $EUID -eq 0 ]] || fail "Ejecútalo como root: añade sudo delante del comando."
 
-# ── Detección del panel ───────────────────────────────────────────────────────
 detect_panel() {
     if [[ -n "$PANEL_DIR" ]]; then echo "${PANEL_DIR%/}"; return; fi
     if [[ -f "$STATE_FILE" ]]; then
@@ -76,7 +62,6 @@ require_panel() {
     ok "Panel detectado en: $PANEL"
 }
 
-# ── Dependencias ──────────────────────────────────────────────────────────────
 pkg_install() {
     local pkg="$1"
     if command -v apt-get >/dev/null 2>&1; then
@@ -100,7 +85,6 @@ require_cmd() {
     ok "$pkg instalado."
 }
 
-# ── Descargar / actualizar el código fuente ───────────────────────────────────
 kit_dir() {
     if [[ -f "$SRC_DIR/$NODE_REL" ]]; then echo "$SRC_DIR"; else echo "$STATE_DIR/source"; fi
 }
@@ -119,7 +103,6 @@ sync_sources() {
         git clone --quiet --branch "$REPO_BRANCH" --depth 1 "$REPO_URL" "$SRC_DIR"
     fi
 
-    # Normalizar saltos de línea por si el repo se editó desde Windows.
     find "$SRC_DIR" -name '*.sh' -print0 | xargs -0 -r sed -i 's/\r$//'
     [[ -f "$SRC_DIR/bin/antiddos" ]] && sed -i 's/\r$//' "$SRC_DIR/bin/antiddos"
     chmod +x "$SRC_DIR"/*.sh 2>/dev/null || true
@@ -136,7 +119,6 @@ remote_has_changes() {
     [[ "$(git -C "$SRC_DIR" rev-parse HEAD)" != "$(git -C "$SRC_DIR" rev-parse "origin/$REPO_BRANCH")" ]]
 }
 
-# ── Estado ────────────────────────────────────────────────────────────────────
 is_installed() {
     [[ -f "$STATE_FILE" ]] && return 0
     local panel; panel="$(detect_panel)"
@@ -155,7 +137,6 @@ install_cli() {
 }
 
 run_installer() {
-    # Sin /opt/<plugin> (kit mínimo) el desinstalador sale de la copia que guarda el plugin en $STATE_DIR/source.
     local dir="$SRC_DIR"
     if [[ ! -f "$dir/$INSTALLER_REL" && "${1:-}" == "uninstall" && -f "$STATE_DIR/source/$INSTALLER_REL" ]]; then
         dir="$STATE_DIR/source"
@@ -165,7 +146,6 @@ run_installer() {
         bash "$dir/$INSTALLER_REL" "$@"
 }
 
-# ── Instalación del panel ─────────────────────────────────────────────────────
 installed_version() {
     local version=""
 
@@ -184,8 +164,6 @@ installed_version() {
     echo "${version:-desconocida}"
 }
 
-# Disco lleno: un instalador que se queda a medias deja el panel roto (error 500, el log no se puede escribir).
-# Se comprueba el espacio libre ANTES de tocar nada.
 check_disk() {
     local dir="${PANEL_DIR:-${PANEL:-/var/www/pterodactyl}}" free need=800
     [ -d "$dir" ] || dir=/
@@ -196,12 +174,7 @@ check_disk() {
     fi
 }
 
-# Kit mínimo: cuando termina de instalar o actualizar, se va todo lo que no hace falta. El código ya está en el
-# panel; no se deja en la VPS un clon completo con su historial (/opt/...) ni una copia entera del repositorio.
-# Se conservan solo los scripts que necesita el desinstalador. La siguiente instalación o actualización vuelve a
-# descargar el código al momento.
 slim_sources() {
-    # El kit (solo lo que necesita el desinstalador) vive en $STATE_DIR/source, cerrado al resto de usuarios.
     local d="$STATE_DIR/source"
     if [ -d "$d" ] && { [ -f "$d/extension.json" ] || [ -f "$d/VERSION" ]; } \
         && { [ -f "$d/$INSTALLER_REL" ] || [ -f "$d/tools/register-provider.php" ] || [ -f "$d/scripts/patcher.php" ]; }; then
@@ -209,7 +182,6 @@ slim_sources() {
             ! -name extension.json ! -name VERSION ! -name .gitattributes ! -name .vexa-slim -exec rm -rf {} + 2>/dev/null || true
         date '+%F %T' > "$d/.vexa-slim" 2>/dev/null || true
         chmod -R o-rwx "$d" 2>/dev/null || true
-        # Y el clon descargado (/opt/<plugin>, con todo el código y su historial) se borra entero.
         case "$SRC_DIR" in
             /opt/?*) rm -rf "$SRC_DIR" ;;
         esac
@@ -285,7 +257,6 @@ do_reinstall() {
 
 do_update() {
     check_disk
-    # En una máquina que solo es nodo no hay panel: se actualiza el agente.
     if [[ -z "$(detect_panel)" ]] && node_installed; then
         sync_sources
         info "Actualizando el agente de nodo…"
@@ -312,7 +283,6 @@ do_update() {
     sync_sources
     run_installer install
     install_cli
-    # Si esta misma máquina también es nodo, se actualiza el agente.
     if node_installed; then
         bash "$(kit_dir)/$NODE_REL" install --yes
     fi
@@ -320,10 +290,7 @@ do_update() {
     slim_sources
 }
 
-# ── Desinstalación ────────────────────────────────────────────────────────────
 do_uninstall() {
-    # Este script puede vivir dentro de SRC_DIR y vamos a borrar esa carpeta:
-    # nos movemos a una copia temporal para que bash pueda seguir leyéndose.
     if [[ "${ANTIDDOS_DETACHED:-0}" != "1" ]]; then
         local tmp; tmp="$(mktemp /tmp/antiddos-XXXXXX.sh)"
         cat "${BASH_SOURCE[0]}" > "$tmp"
@@ -369,10 +336,6 @@ do_uninstall() {
     ok "Anti-DDoS y Optimización desinstalado por completo. No queda nada."
 }
 
-# ── Todo en uno: panel + nodo en la misma máquina ─────────────────────────────
-# Instala/actualiza la extensión del panel y el firewall del nodo de una vez.
-# La clave de la API se genera sola y se entrega al agente (además, al estar el
-# panel en esta máquina, el agente lee los bloqueos en local, sin red ni clave).
 do_install_all() {
     require_panel
     sync_sources
@@ -397,7 +360,6 @@ do_install_all() {
     info "Panel: ${url:-tu-panel}/admin/extensions/antiddos   ·   Estado: sudo antiddos status"
 }
 
-# ── Agente de nodo (firewall anti-DDoS) ───────────────────────────────────────
 do_node_install() {
     sync_sources
     [[ -f "$(kit_dir)/$NODE_REL" ]] || fail "Falta $NODE_REL en el repositorio."
@@ -424,7 +386,6 @@ need_fw() { node_installed || fail "El firewall no está instalado en esta máqu
 
 do_fw() { need_fw; exec "$FW_BIN" "$@"; }
 
-# ── Bloqueos manuales: firewall local (si hay) + panel (si hay) ───────────────
 do_ban() {
     local ip="${1:-}" minutes="${2:-}"
     [[ -n "$ip" ]] || fail "Uso: antiddos ban <IP> [minutos]   (0 = permanente)"
@@ -479,7 +440,6 @@ do_whitelist() {
     esac
 }
 
-# ── Operadores (ASN) y países: se gestionan en el panel y llegan a todos los nodos ──
 do_net() {
     local kind="$1"; shift
     { [[ -n "$(detect_panel)" ]] && is_installed; } || fail "Los operadores y países se bloquean desde el panel: ejecuta este comando en la máquina del panel (o usa la pestaña Bloqueos)."
@@ -492,7 +452,6 @@ do_net() {
     run_installer artisan "$kind" "$@" "${extra[@]}" || exit 1
 }
 
-# Origen, reputación y si se puede bloquear una IP.
 do_ip() {
     [[ -n "${1:-}" ]] || fail "Uso: antiddos ip <IP>"
     require_panel
@@ -504,7 +463,6 @@ do_nginx() {
     bash "$(kit_dir)/scripts/nginx-shield.sh" "$1" "${PASSTHRU[@]}"
 }
 
-# ── Auto-update ───────────────────────────────────────────────────────────────
 autoupdate_on() {
     [[ -f "$SRC_DIR/antiddos.sh" ]] || sync_sources
     local line="0 4 * * * /usr/bin/env bash $SRC_DIR/antiddos.sh update >> $LOG_FILE 2>&1 # $CRON_MARKER"
@@ -522,7 +480,6 @@ autoupdate_off() {
     fi
 }
 
-# ── Estado / utilidades del panel ─────────────────────────────────────────────
 do_status() {
     PANEL="$(detect_panel)"
     if [[ -f "$SRC_DIR/$INSTALLER_REL" && -n "$PANEL" ]]; then
@@ -559,7 +516,6 @@ do_version() {
     fi
 }
 
-# ── Ayuda ─────────────────────────────────────────────────────────────────────
 usage() {
     cat <<EOF
 Anti-DDoS y Optimización — anti-DDoS y optimización para Pterodactyl
@@ -627,7 +583,6 @@ EOF
 ACTION="${1:-help}"
 shift || true
 
-# Argumentos posicionales (ban/unban/whitelist/fw) y opciones.
 POS=()
 for arg in "$@"; do
     case "$arg" in
@@ -641,7 +596,6 @@ for arg in "$@"; do
     esac
 done
 
-# Opciones que 'ban' admite como --minutes=N
 case "$ACTION" in
     ban)
         MIN=""

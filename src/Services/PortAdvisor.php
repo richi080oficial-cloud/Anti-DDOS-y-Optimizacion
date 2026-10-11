@@ -2,14 +2,8 @@
 
 namespace Pterodactyl\Extensions\AntiDDoS\Services;
 
-/**
- * Valora si un puerto es una buena eleccion para un servidor de Minecraft.
- *
- * Niveles: error (cambialo ya), warn (mejorable). Sin avisos = recomendado.
- */
 class PortAdvisor
 {
-    /** Puertos de servicios habituales: nunca deberia usarlos un servidor de juego. */
     public const SERVICE_PORTS = [
         20 => 'FTP', 21 => 'FTP', 22 => 'SSH', 23 => 'Telnet', 25 => 'SMTP', 53 => 'DNS', 80 => 'HTTP', 110 => 'POP3',
         143 => 'IMAP', 443 => 'HTTPS', 465 => 'SMTPS', 587 => 'SMTP', 993 => 'IMAPS', 995 => 'POP3S',
@@ -17,21 +11,13 @@ class PortAdvisor
         8443 => 'HTTPS alternativo', 9000 => 'PHP-FPM / Portainer', 11211 => 'Memcached', 27017 => 'MongoDB',
     ];
 
-    /** Puertos por defecto de Minecraft: los que mas escanean los bots. */
     public const DEFAULT_PORTS = [25565 => 'Minecraft Java', 19132 => 'Minecraft Bedrock'];
 
-    /** Rango en el que se proponen los puertos nuevos (lejos de los escaneos habituales y de los puertos temporales de Linux). */
     public const SAFE_MIN = 20000;
     public const SAFE_MAX = 32000;
 
-    /** Inicio del rango de puertos temporales de Linux (net.ipv4.ip_local_port_range). */
     public const EPHEMERAL_FROM = 32768;
 
-    /**
-     * @param array{tcp: string, udp: string}|null $protected puertos protegidos por el firewall (null = no se comprueba)
-     * @param array<int, int> $reserved puertos de Wings del nodo (daemonListen, daemonSFTP)
-     * @return array<int, array{level: string, text: string}>
-     */
     public function assess(int $port, bool $bedrock = false, ?array $protected = null, array $reserved = []): array
     {
         $issues = [];
@@ -80,7 +66,6 @@ class PortAdvisor
         return $issues;
     }
 
-    /** Peor nivel de una lista de avisos: error | warn | ok. */
     public function worst(array $issues): string
     {
         $levels = array_column($issues, 'level');

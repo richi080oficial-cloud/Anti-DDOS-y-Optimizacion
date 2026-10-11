@@ -7,15 +7,8 @@ use Illuminate\Support\Facades\Cache;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldAgent;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldMetric;
 
-/**
- * Registra los latidos de los agentes de nodo. El payload viene de un script
- * del servidor, pero se valida campo a campo: nada se guarda sin sanear.
- */
 class AgentRegistry
 {
-    /**
-     * @param array<string, mixed> $data
-     */
     public function record(array $data): ?ShieldAgent
     {
         $host = (string) ($data['host'] ?? '');
@@ -84,17 +77,9 @@ class AgentRegistry
         return $agent;
     }
 
-    /**
-     * Guarda una muestra de contadores para las graficas (como maximo una cada
-     * ~25 s por agente). Un fallo aqui nunca debe impedir registrar el latido.
-     *
-     * @param array<string, mixed> $payload
-     */
     protected function sample(string $host, array $payload): void
     {
         try {
-            // Como mucho una muestra cada 25 s por agente. Se controla con la cache
-            // (SET NX en Redis) en vez de consultar la ultima fila en cada latido.
             if (!Cache::add('antiddos:metric:last:' . $host, 1, 25)) {
                 return;
             }
@@ -123,16 +108,9 @@ class AgentRegistry
                 'tx_pkts' => $payload['tx_pkts'],
             ]);
         } catch (\Throwable $e) {
-            // Sin tabla (migracion pendiente) o BD ocupada: se ignora.
         }
     }
 
-    /**
-     * Las IPs con mas conexiones que informa el agente, saneadas.
-     *
-     * @param mixed $list
-     * @return array<int, array{ip: string, conns: int}>
-     */
     protected function topIps(mixed $list): array
     {
         $out = [];
@@ -148,12 +126,6 @@ class AgentRegistry
         return array_slice($out, 0, 10);
     }
 
-    /**
-     * Bloqueos locales activos del firewall, con motivo y tiempo restante.
-     *
-     * @param mixed $list
-     * @return array<int, array{ip: string, left: int, why: string}>
-     */
     protected function fwBans(mixed $list): array
     {
         $out = [];

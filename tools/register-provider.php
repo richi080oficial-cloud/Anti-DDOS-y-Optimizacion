@@ -2,18 +2,6 @@
 
 declare(strict_types=1);
 
-/**
- * Registra o elimina el ServiceProvider de Anti-DDoS y Optimización en el panel.
- *
- * Uso:
- *   php register-provider.php register   /var/www/pterodactyl
- *   php register-provider.php unregister /var/www/pterodactyl
- *
- * Soporta los dos formatos de Laravel: bootstrap/providers.php (Laravel >= 11)
- * y el array 'providers' de config/app.php (Laravel <= 10, Pterodactyl 1.x).
- * Antes de escribir crea una copia de seguridad *.antiddos.bak.
- */
-
 const PROVIDER_CLASS = 'Pterodactyl\\Extensions\\AntiDDoS\\Providers\\AntiDDoSServiceProvider';
 
 $mode = $argv[1] ?? '';
@@ -62,7 +50,6 @@ $pattern = '/^[ \t]*' . preg_quote(PROVIDER_CLASS, '/') . '::class,[ \t]*\r?\n/m
 $updated = preg_replace($pattern, '', $contents, 1);
 
 if ($updated === null || $updated === $contents) {
-    // Fallback: elimina solo la referencia, dejando el fichero valido.
     $updated = str_replace(PROVIDER_CLASS . '::class,', '', $contents);
 }
 
@@ -70,9 +57,6 @@ writeFile($file, $updated);
 echo "Provider eliminado de $file\n";
 exit(0);
 
-/**
- * @return array{0: string, 1: string}|null [ruta, tipo]
- */
 function locateTarget(string $panel): ?array
 {
     $providers = $panel . '/bootstrap/providers.php';
@@ -106,7 +90,6 @@ function insertProvider(string $contents, string $kind): ?string
     return substr($contents, 0, $lineStart) . $line . substr($contents, $lineStart);
 }
 
-/** Posicion del ] que cierra el array devuelto por bootstrap/providers.php. */
 function findPlainArrayClose(string $contents): ?int
 {
     $open = strpos($contents, '[');
@@ -114,7 +97,6 @@ function findPlainArrayClose(string $contents): ?int
     return $open === false ? null : matchingBracket($contents, $open);
 }
 
-/** Posicion del ] que cierra el array 'providers' de config/app.php. */
 function findConfigArrayClose(string $contents): ?int
 {
     if (preg_match('/([\'"])providers\1\s*=>\s*\[/', $contents, $m, PREG_OFFSET_CAPTURE) !== 1) {

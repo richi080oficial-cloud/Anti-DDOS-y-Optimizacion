@@ -8,43 +8,16 @@ use Illuminate\Http\Response as HttpResponse;
 use Illuminate\Support\Facades\Route;
 use Symfony\Component\HttpFoundation\Response;
 
-/**
- * Inyecta la entrada "Anti-DDoS y Optimización" en el menu lateral del admin en tiempo
- * de ejecucion.
- *
- * Es la red de seguridad del parche Blade (tools/patch-panel.php): si el
- * layout del panel esta sustituido por un tema, si una actualizacion del panel
- * lo sobrescribio o si el ancla no se encontro durante la instalacion, el
- * enlace sigue apareciendo porque se anade sobre el HTML ya renderizado.
- *
- * Reglas de seguridad que se aplican antes de tocar nada:
- *   - solo peticiones GET no-AJAX de /admin* hechas por un root_admin,
- *   - solo respuestas 200 de tipo text/html (nunca JSON, descargas ni streams),
- *   - si el menu ya contiene un enlace a admin/extensions/antiddos, no se hace nada
- *     (asi el parche Blade y este middleware nunca se duplican).
- *
- * El HTML insertado usa exclusivamente clases de AdminLTE (header, active,
- * fa fa-shield) y no fija ningun color, por lo que hereda el skin activo del
- * panel: tema claro, oscuro o cualquier tema de terceros.
- */
 class AdminSidebarLink
 {
-    /** Marca en HTML (no Blade) para reconocer nuestra propia insercion. */
     private const MARKER = '<!-- antiddos:sidebar -->';
 
-    /**
-     * Cabecera de categoria compartida por todos los plugins de Vexa
-     * Studios: si ya esta en el HTML (puesta por este mismo middleware en
-     * otro plugin, o por el parche Blade estatico de cualquiera de ellos),
-     * no se vuelve a anadir.
-     */
     private const CATEGORY_HEADER = '<li class="header">VEXA STUDIO</li>';
 
     public function handle(Request $request, Closure $next): Response
     {
         $response = $next($request);
 
-        // Oculto por defecto con Vexa Hub salvo que el plugin este fijado en el menu (ver Support/Sidebar.php).
         if (!$this->applies($request, $response) || !\Pterodactyl\Extensions\AntiDDoS\Support\Sidebar::visible()) {
             return $response;
         }
@@ -63,8 +36,6 @@ class AdminSidebarLink
 
         [$openEnd, $close] = $bounds;
 
-        // Solo se mira DENTRO del menu: la pagina de la extension contiene
-        // formularios que apuntan a admin/extensions/antiddos y no deben contar.
         if (str_contains(substr($html, $openEnd, $close - $openEnd), 'admin/extensions/antiddos')) {
             return $response;
         }
@@ -83,13 +54,8 @@ class AdminSidebarLink
         return $response;
     }
 
-    /**
-     * Determina si la respuesta es una pagina de administracion en HTML que
-     * podemos reescribir sin riesgo.
-     */
     protected function applies(Request $request, Response $response): bool
     {
-        // Descarta StreamedResponse, BinaryFileResponse y JsonResponse.
         if (!$response instanceof HttpResponse) {
             return false;
         }
@@ -119,10 +85,6 @@ class AdminSidebarLink
         return $user !== null && (bool) $user->root_admin;
     }
 
-    /**
-     * HTML de la entrada. Sin estilos propios: el tema activo decide colores,
-     * tipografia y estado hover/active.
-     */
     protected function entry(Request $request): string
     {
         $active = $request->is('admin/extensions/antiddos', 'admin/extensions/antiddos/*') ? ' class="active"' : '';
@@ -139,17 +101,6 @@ class AdminSidebarLink
             . '</li>' . "\n";
     }
 
-    /**
-     * Limites del menu lateral: [posicion tras el <ul> de apertura, posicion
-     * del </ul> que lo cierra].
-     *
-     * El cierre se calcula contando aperturas y cierres de <ul>, de modo que
-     * los submenus (treeview-menu) no confunden la busqueda. Si el tema
-     * renombra la clase del <ul> se usa el primer <ul> dentro de
-     * <section class="sidebar">.
-     *
-     * @return array{0: int, 1: int}|null
-     */
     protected function sidebarBounds(string $html): ?array
     {
         $openEnd = null;

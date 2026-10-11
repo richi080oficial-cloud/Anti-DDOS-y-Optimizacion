@@ -4,36 +4,20 @@ namespace Pterodactyl\Extensions\AntiDDoS\Services;
 
 use Illuminate\Support\Facades\Cache;
 
-/**
- * Trafico «en vivo» (una muestra por segundo) de los ultimos 5 minutos.
- *
- * De donde salen las muestras:
- *   - Agente en la MISMA maquina que el panel: el servicio antiddos-live escribe
- *     /var/lib/antiddos/live.json cada segundo y el panel lo lee directamente.
- *   - Agente en OTRA maquina: envia cada muestra a POST /api/antiddos/live y se
- *     guarda en la cache del panel (Redis), sin tocar la base de datos.
- *
- * El calculo de velocidades lo hace TrafficEngine (el mismo que el historial).
- */
 class LiveTraffic
 {
     public const FILE = '/var/lib/antiddos/live.json';
 
-    public const STEP = 1;            // segundos por punto
-    public const WINDOW = 300;        // ventana mostrada (5 min)
-    public const KEEP = 300;          // muestras guardadas por nodo
-    public const GAP = 5.0;           // mas de esto entre muestras = hueco
-    public const STALE = 6.0;         // sin muestras en este tiempo = datos viejos
+    public const STEP = 1;
+    public const WINDOW = 300;
+    public const KEEP = 300;
+    public const GAP = 5.0;
+    public const STALE = 6.0;
 
     public function __construct(protected TrafficEngine $engine)
     {
     }
 
-    /**
-     * Guarda una muestra recibida por HTTP de un agente remoto.
-     *
-     * @param array<string, mixed> $data
-     */
     public function push(array $data): bool
     {
         $host = (string) ($data['host'] ?? '');
@@ -44,7 +28,6 @@ class LiveTraffic
 
         $sample = $this->normalize($data);
 
-        // La hora del agente solo se acepta si es razonable; si no, la del panel.
         if (abs($sample['t'] - microtime(true)) > 120) {
             $sample['t'] = round(microtime(true), 3);
         }
@@ -61,10 +44,6 @@ class LiveTraffic
         return true;
     }
 
-    /**
-     * @param array<string, mixed> $s
-     * @return array<string, int|float>
-     */
     protected function normalize(array $s): array
     {
         $out = ['t' => is_numeric($s['t'] ?? null) ? round((float) $s['t'], 3) : round(microtime(true), 3)];
@@ -76,14 +55,10 @@ class LiveTraffic
         return $out;
     }
 
-    /**
-     * @return array<string, array<int, array<string, int|float>>>
-     */
     protected function sources(?string $only): array
     {
         $out = [];
 
-        // Agente local: archivo escrito por antiddos-live (puede no existir).
         $file = @file_get_contents(self::FILE);
 
         if ($file !== false) {
@@ -94,7 +69,6 @@ class LiveTraffic
             }
         }
 
-        // Agentes remotos: cache.
         foreach (array_keys((array) Cache::get('antiddos:live:hosts', [])) as $host) {
             $samples = (array) Cache::get('antiddos:live:' . $host, []);
 
@@ -110,10 +84,6 @@ class LiveTraffic
         return $out;
     }
 
-    /**
-     * @param array<int, mixed> $samples
-     * @return array<int, array<string, int|float>>
-     */
     protected function clean(array $samples): array
     {
         $out = [];
@@ -129,9 +99,6 @@ class LiveTraffic
         return $out;
     }
 
-    /**
-     * @return array<string, mixed>
-     */
     public function series(?string $host = null, string $view = 'packets'): array
     {
         $now = microtime(true);

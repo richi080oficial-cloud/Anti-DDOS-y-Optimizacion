@@ -1,17 +1,6 @@
 #!/usr/bin/env bash
-#
-# Anti-DDoS y Optimización — instalador público
-# Descarga el gestor (antiddos.sh) desde el repositorio y lo ejecuta.
-#
-#   Panel:  bash <(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/Anti-DDOS-y-Optimizacion/main/install.sh) install
-#   Nodo:   bash <(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/Anti-DDOS-y-Optimizacion/main/install.sh) node-install
-#
-# Autor: Vexa Studio · Licencia: MIT
-#
 set -Eeuo pipefail
 
-# ── Configuración ─────────────────────────────────────────────────────────────
-# Repositorio público: no se necesita ninguna credencial.
 _OWNER="${REPO_OWNER:-richi080oficial-cloud}"
 _REPO="${REPO_NAME:-Anti-DDOS-y-Optimizacion}"
 _BRANCH="${REPO_BRANCH:-main}"
@@ -25,7 +14,6 @@ fail() { echo -e "${RED}[antiddos]${NC} $*" >&2; exit 1; }
 
 command -v curl >/dev/null 2>&1 || fail "curl no está instalado. Instálalo y reintenta."
 
-# ── Descargar el gestor ───────────────────────────────────────────────────────
 _URL="https://raw.githubusercontent.com/$_OWNER/$_REPO/$_BRANCH/$_FILE"
 
 _TMP="$(mktemp /tmp/antiddos-XXXXXX.sh)"
@@ -47,11 +35,9 @@ esac
 [[ -s "$_TMP" ]] || fail "El archivo descargado está vacío. Reintenta en unos segundos."
 head -n 1 "$_TMP" | grep -q '^#!' || fail "El archivo descargado no es un script válido."
 
-# Normalizar saltos de línea por si el repo se editó desde Windows.
 sed -i 's/\r$//' "$_TMP"
 chmod +x "$_TMP"
 
-# El gestor usa estas variables para clonar el repositorio.
 export REPO_URL="https://github.com/$_OWNER/$_REPO.git"
 export REPO_BRANCH="$_BRANCH"
 

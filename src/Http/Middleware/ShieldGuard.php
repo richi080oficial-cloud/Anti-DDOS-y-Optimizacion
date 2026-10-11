@@ -14,26 +14,6 @@ use Pterodactyl\Extensions\AntiDDoS\Services\RateCounter;
 use Pterodactyl\Extensions\AntiDDoS\Services\SafeIps;
 use Symfony\Component\HttpFoundation\Response;
 
-/**
- * Escudo de capa 7 del panel: limita las peticiones por IP y bloquea a quien
- * se pasa. Se registra como middleware GLOBAL (despues de TrustProxies, para
- * ver la IP real detras de Cloudflare/nginx) y antes de sesion, base de datos
- * y PHP "caro": un bloqueado recibe un 429 casi gratis.
- *
- * Orden de decisiones (de mas barato a mas caro, siempre sin SQL):
- *   1. api/remote/* (Wings) y api/antiddos/* (nodos): pasan siempre.
- *   2. IP interna (privada/loopback) o en la lista blanca: pasa siempre.
- *   3. IP bloqueada: 429. IP de un operador (ASN) o pais bloqueado: 403.
- *   4. Assets estaticos: pasan sin contarse.
- *   5. Usuario con sesion/clave de API validas (PanelIdentity): se cuenta por
- *      usuario con un limite alto; pasarse = 429 breve, sin bloquear la IP.
- *   6. Visitante anonimo: se cuenta por IP; si supera el limite, se bloquea
- *      (con duracion creciente por reincidencia) y se responde 429.
- *
- * Si la IP que ve el panel es siempre la de un proxy interno (TRUSTED_PROXIES
- * sin configurar), todas las peticiones parecen internas y el escudo no hace
- * nada: falla "abierto" a proposito, para no bloquear a todos los usuarios.
- */
 class ShieldGuard
 {
     public function __construct(
@@ -48,7 +28,6 @@ class ShieldGuard
         try {
             $deny = $this->inspect($request);
         } catch (\Throwable $e) {
-            // Un fallo del escudo (cache caida, BD sin migrar...) nunca debe tumbar el panel.
             return $next($request);
         }
 
@@ -69,8 +48,6 @@ class ShieldGuard
             return null;
         }
 
-        // Una IP de Cloudflare no es la del visitante (falta TRUSTED_PROXIES): bloquearla
-        // cortaria el acceso a TODOS los usuarios que pasan por ese nodo de Cloudflare.
         if (IpMatcher::isInternal($ip) || IpMatcher::isCloudflare($ip) || app(SafeIps::class)->isInfrastructure($ip) || IpMatcher::inList($ip, IpMatcher::parseList((string) $settings['whitelist']))) {
             return null;
         }
@@ -81,7 +58,6 @@ class ShieldGuard
             return $this->deny($request, $remaining);
         }
 
-        // Operador (ASN) o pais bloqueado: 403 directo, sin contar ni tocar la BD.
         if ($this->nets->match($ip) !== null) {
             return $this->deny($request, 0, 403);
         }
@@ -96,9 +72,6 @@ class ShieldGuard
             }
         }
 
-        // Quien usa el panel con sesion o clave de API validas (consola, archivos, varias
-        // pestañas, una oficina con una sola IP...) cuenta POR USUARIO con un limite
-        // alto y no gasta el cupo de la IP. Solo el visitante anonimo paga el limite estricto.
         $who = app(PanelIdentity::class)->resolve($request, $ip);
 
         if ($who !== null) {
@@ -112,11 +85,6 @@ class ShieldGuard
         return null;
     }
 
-    /**
-     * Limites de un usuario reconocido. Pasarse del suyo solo da un 429 breve (no
-     * bloquea la IP: puede haber mas gente detras). Un tope por IP, mucho mas alto,
-     * sigue frenando a quien reparte el abuso entre muchas sesiones.
-     */
     protected function userLimit(Request $request, string $ip, string $who, int $limit): ?Response
     {
         if ($this->counter->hit('usr', $who) > $limit) {

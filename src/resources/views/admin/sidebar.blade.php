@@ -1,4 +1,3 @@
-{{-- Interruptor «Mostrar en el menú lateral». Solo se ve con Vexa Hub instalado (sin él la entrada siempre se muestra). --}}
 @if (\Pterodactyl\Extensions\AntiDDoS\Support\Sidebar::hub())
     <form action="{{ route('admin.extensions.antiddos.sidebar') }}" method="POST"
           style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin: 0 0 15px; padding: 9px 14px; border: 1px solid rgba(127, 127, 127, .28); border-radius: 4px;">

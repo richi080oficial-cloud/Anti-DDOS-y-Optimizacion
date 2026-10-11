@@ -1,18 +1,4 @@
 #!/usr/bin/env bash
-#
-# Anti-DDoS y Optimización para Pterodactyl - instalador / actualizador / desinstalador del PANEL
-#
-# Normalmente lo invoca el gestor (antiddos.sh). Uso directo:
-#
-#   bash scripts/addon-install.sh install
-#   bash scripts/addon-install.sh update
-#   bash scripts/addon-install.sh uninstall [--force] [--drop-data]
-#   bash scripts/addon-install.sh status
-#   bash scripts/addon-install.sh apikey [--key=CLAVE]
-#   bash scripts/addon-install.sh info
-#   bash scripts/addon-install.sh prune
-#   bash scripts/addon-install.sh artisan <accion> [args…]   (ban, unban, bans, whitelist…)
-#
 set -Eeuo pipefail
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -50,10 +36,6 @@ error() { printf '%s[antiddos]%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; }
 die()   { error "$*"; exit 1; }
 
 trap 'error "El script se ha detenido en la línea ${LINENO}."' ERR
-
-# ---------------------------------------------------------------------------
-# Utilidades
-# ---------------------------------------------------------------------------
 
 require_root() {
     if [ "$(id -u)" -ne 0 ]; then
@@ -103,7 +85,6 @@ detect_panel() {
     die "No se pudo localizar el panel. Ejecuta: sudo PANEL_DIR=/ruta/al/panel bash scripts/addon-install.sh install"
 }
 
-# Igual que detect_panel pero sin abortar (para 'status').
 detect_panel_soft() {
     load_state
 
@@ -166,8 +147,6 @@ check_panel_version() {
     fi
 }
 
-# Ejecuta artisan como el usuario web cuando es posible, para no dejar
-# archivos de caché propiedad de root en storage/ y bootstrap/cache.
 artisan() {
     if [ "$(id -u)" -eq 0 ] && [ -n "$WEB_USER" ] && [ "$WEB_USER" != "root" ] \
        && command -v runuser >/dev/null 2>&1; then
@@ -233,10 +212,6 @@ panel_patched() {
         "${PANEL_DIR}/resources/views/layouts/admin.blade.php" 2>/dev/null
 }
 
-# ---------------------------------------------------------------------------
-# Instalación
-# ---------------------------------------------------------------------------
-
 do_install() {
     require_root install
     require_cmd php
@@ -263,8 +238,6 @@ do_install() {
         | ( cd "${PANEL_DIR}/${TARGET_REL}" && tar -xf - )
     printf '%s\n' "$ADDON_VERSION" > "${PANEL_DIR}/${TARGET_REL}/VERSION"
 
-    # El namespace Pterodactyl\Extensions\* ya lo cubre el autoload PSR-4 del
-    # panel (app/ => Pterodactyl\), así que no hay que tocar composer.json.
     info "Registrando el service provider…"
     backup_file "${PANEL_DIR}/config/app.php"
     backup_file "${PANEL_DIR}/bootstrap/providers.php"
@@ -273,8 +246,6 @@ do_install() {
 
     info "Integrando el enlace en el menú del panel…"
     backup_file "${PANEL_DIR}/resources/views/layouts/admin.blade.php"
-    # Se retira el parche anterior (si lo hay) y se vuelve a aplicar entero,
-    # para que las correcciones lleguen siempre a paneles ya instalados.
     php "${STATE_DIR}/source/tools/patch-panel.php" unpatch "$PANEL_DIR" >/dev/null 2>&1 || true
     php "${STATE_DIR}/source/tools/patch-panel.php" patch "$PANEL_DIR" \
         || warn "El parche del menú no se pudo aplicar; la extensión funciona, pero tendrás que entrar por URL."
@@ -284,8 +255,6 @@ do_install() {
     info "Ejecutando migraciones…"
     artisan migrate --force || die "Las migraciones fallaron. Revisa la conexión a la base de datos."
 
-    # La clave de la API (la usan los nodos para descargar la lista de
-    # bloqueos) se genera sola la primera vez y nunca se pisa después.
     info "Comprobando la clave de la API…"
     artisan "$ARTISAN_NAMESPACE" apikey --if-missing || warn "No se pudo generar la clave de la API; ejecuta 'sudo antiddos apikey' a mano."
 
@@ -312,10 +281,6 @@ install_cli() {
     fi
 }
 
-# ---------------------------------------------------------------------------
-# Actualización
-# ---------------------------------------------------------------------------
-
 do_update() {
     require_root update
     require_cmd git
@@ -323,7 +288,6 @@ do_update() {
     detect_panel
     detect_web_user
 
-    # Si el gestor está presente, es él quien mantiene el código fuente.
     if [ -f "${MANAGER_SRC_DIR}/antiddos.sh" ]; then
         info "Delegando la actualización en el gestor (${MANAGER_SRC_DIR}/antiddos.sh)…"
         PANEL_DIR="$PANEL_DIR" WEB_USER="$WEB_USER" \
@@ -344,7 +308,6 @@ do_update() {
     new_version="$(tr -d '[:space:]' < "${tmp}/repo/VERSION" 2>/dev/null || echo 'unknown')"
     info "Versión instalada: ${ADDON_INSTALLED_VERSION:-desconocida} → nueva: ${new_version}"
 
-    # Se ejecuta el instalador de la copia nueva para evitar auto-modificación.
     if ! PANEL_DIR="$PANEL_DIR" WEB_USER="$WEB_USER" ANTIDDOS_REPO="$REPO_URL" \
             bash "${tmp}/repo/scripts/addon-install.sh" install; then
         rm -rf "$tmp"
@@ -354,17 +317,12 @@ do_update() {
     ok "Actualización completada."
 }
 
-# ---------------------------------------------------------------------------
-# Desinstalación
-# ---------------------------------------------------------------------------
-
 do_uninstall() {
     require_root uninstall
     load_state
     detect_panel
     detect_web_user
 
-    # Si nos ejecutamos desde el propio STATE_DIR, trabajamos desde una copia.
     case "$SOURCE_DIR" in
         "${STATE_DIR}"*)
             local tmp
@@ -423,10 +381,6 @@ do_uninstall() {
     info "Si instalaste el agente de nodo en esta máquina, quítalo con: bash scripts/node-agent.sh uninstall"
 }
 
-# ---------------------------------------------------------------------------
-# Estado y utilidades
-# ---------------------------------------------------------------------------
-
 do_status() {
     load_state
     detect_panel_soft || true
@@ -471,7 +425,6 @@ do_apikey() {
 do_info()  { require_installed; artisan "$ARTISAN_NAMESPACE" info; }
 do_prune() { require_installed; artisan "$ARTISAN_NAMESPACE" prune; }
 
-# Reenvía cualquier acción al comando artisan (ban, unban, bans, whitelist…).
 do_artisan() {
     require_root artisan
     require_installed

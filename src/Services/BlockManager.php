@@ -10,29 +10,15 @@ use Pterodactyl\Extensions\AntiDDoS\Models\ShieldEvent;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldMetric;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldSetting;
 
-/**
- * Gestiona las IPs bloqueadas.
- *
- * La base de datos es la fuente de verdad (la ve el admin y la descargan los
- * nodos), pero en cada peticion solo se consulta un mapa pequeno en cache, asi
- * que el escudo no anade ninguna consulta SQL al camino normal.
- */
 class BlockManager
 {
     public const CACHE_KEY = 'antiddos:blocklist';
 
-    /** Una clave por IP bloqueada (valor: caducidad, 0 = permanente) y la marca de «indice creado». */
     protected const IP_KEY = 'antiddos:blk:ip:';
     protected const READY_KEY = 'antiddos:blk:ready';
 
-    /** Segundos que vive el mapa en cache (tambien es la demora maxima de un desbloqueo en otro worker). */
     protected const MAP_TTL = 30;
 
-    /**
-     * Mapa ip => caducidad (timestamp; 0 = permanente) de los bloqueos activos.
-     *
-     * @return array<string, int>
-     */
     public function map(): array
     {
         return Cache::remember(self::CACHE_KEY, self::MAP_TTL, function () {
@@ -61,13 +47,6 @@ class BlockManager
         return $map[$ip] === 0 || $map[$ip] > time();
     }
 
-    /**
-     * Segundos que le quedan al bloqueo (0 = permanente, null = no esta bloqueada).
-     *
-     * Es lo que consulta el escudo web en CADA peticion, asi que no carga el mapa
-     * entero (en un ataque puede tener miles de IPs): cada IP bloqueada tiene su
-     * propia clave en cache y se piden las dos claves de una vez (MGET en Redis).
-     */
     public function remaining(string $ip): ?int
     {
         $key = self::IP_KEY . $ip;
@@ -93,7 +72,6 @@ class BlockManager
         return $exp === 0 ? 0 : $exp - time();
     }
 
-    /** Crea las claves por IP a partir de la BD (tras reiniciar la cache o una vez al dia). */
     protected function index(): void
     {
         foreach ($this->map() as $ip => $exp) {
@@ -112,12 +90,8 @@ class BlockManager
         }
     }
 
-    /**
-     * Bloquea una IP. $minutes = null -> permanente.
-     */
     public function block(string $ip, ?int $minutes, ?string $reason = null, string $source = 'manual', ?int $userId = null, ?string $requestIp = null): ShieldBlock
     {
-        // Red de seguridad contra falsos positivos: ciertas IPs no se pueden bloquear nunca.
         if (($why = app(SafeIps::class)->protectedReason($ip, $requestIp)) !== null) {
             throw new \DomainException($why);
         }
@@ -144,10 +118,6 @@ class BlockManager
         return $block;
     }
 
-    /**
-     * Bloqueo automatico del escudo: la duracion se duplica con cada reincidencia
-     * (dentro de la ventana en la que se recuerda a la IP) hasta un maximo.
-     */
     public function blockAuto(string $ip, string $reason): ShieldBlock
     {
         $settings = ShieldSetting::snapshot();
@@ -174,7 +144,6 @@ class BlockManager
         return $deleted;
     }
 
-    /** @return Collection<int, ShieldBlock> */
     public function active(): Collection
     {
         return ShieldBlock::query()
@@ -185,10 +154,6 @@ class BlockManager
             ->get();
     }
 
-    /**
-     * Borra bloqueos caducados hace mas de un dia (se conservan ese tiempo para
-     * recordar reincidencias) y eventos antiguos. Devuelve cuantos bloqueos se quitaron.
-     */
     public function prune(): int
     {
         $removed = ShieldBlock::query()
@@ -202,7 +167,6 @@ class BlockManager
         try {
             ShieldMetric::query()->where('recorded_at', '<', Carbon::now()->subDays(min($days, MetricsService::KEEP_DAYS)))->delete();
         } catch (\Throwable $e) {
-            // Tabla de metricas aun sin migrar.
         }
 
         app(NetworkBlocks::class)->prune();
@@ -217,11 +181,6 @@ class BlockManager
         Cache::forget(self::CACHE_KEY);
     }
 
-    /**
-     * Texto que descargan los nodos: "B <ip>" por cada bloqueo activo, "A <cidr>"
-     * por cada rango de un operador/pais bloqueado, "W <ip/cidr>" por cada entrada
-     * de la lista blanca y "C CLAVE VALOR" por cada ajuste del firewall.
-     */
     public function feed(): string
     {
         $lines = [];
@@ -230,23 +189,19 @@ class BlockManager
             $lines[] = 'B ' . $block->ip;
         }
 
-        // Operadores (ASN) y paises bloqueados: "A <cidr>" (set vs_asn de los nodos).
         try {
             foreach (app(NetworkBlocks::class)->feedPrefixes() as $cidr) {
                 $lines[] = 'A ' . $cidr;
             }
         } catch (\Throwable $e) {
-            // Tabla aun sin migrar: el resto del feed sigue funcionando.
         }
 
         $whitelist = IpMatcher::parseList((string) ShieldSetting::read('whitelist', ''));
 
-        // Los nodos, los agentes y el propio panel nunca se bloquean (aunque no esten en la lista blanca).
         foreach (array_unique(array_merge($whitelist, app(SafeIps::class)->infrastructure())) as $rule) {
             $lines[] = 'W ' . $rule;
         }
 
-        // Ajustes del firewall gestionados desde el panel: "C CLAVE VALOR".
         $settings = ShieldSetting::snapshot();
         $map = [
             'fw_tcp_ports' => 'TCP_PORTS', 'fw_udp_ports' => 'UDP_PORTS', 'fw_conn_limit' => 'CONN_LIMIT',
@@ -254,8 +209,6 @@ class BlockManager
             'fw_attack_mode' => 'ATTACK_MODE', 'fw_ban_mode' => 'BAN_MODE',
         ];
 
-        // Con el firewall gestionado y la deteccion activa, los puertos que se envian
-        // son los manuales mas los de los servidores de Minecraft detectados.
         $override = [];
 
         if ((string) ($settings['fw_tcp_ports'] ?? '') !== '' && !empty($settings['fw_auto'])) {
@@ -273,7 +226,6 @@ class BlockManager
         foreach ($map as $key => $agentKey) {
             $value = trim((string) ($override[$key] ?? $settings[$key] ?? ''));
 
-            // Un TCP_PORTS vacio ("-") dejaria al nodo sin proteccion: no se envia nunca.
             if ($agentKey === 'TCP_PORTS' && $value === '-') {
                 continue;
             }
