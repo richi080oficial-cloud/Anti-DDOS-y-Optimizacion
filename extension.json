@@ -1,7 +1,7 @@
 {
   "name": "Anti-DDoS y Optimización",
   "identifier": "antiddos",
-  "version": "1.13.1",
+  "version": "1.13.2",
   "description": "Anti-DDoS para Pterodactyl: firewall del nodo (iptables/ipset) y escudo del panel, gestionados desde el panel de administracion.",
   "author": "Vexa Studio",
   "target": {

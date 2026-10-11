@@ -175,7 +175,20 @@ installed_version() {
     echo "${version:-desconocida}"
 }
 
+# Disco lleno: un instalador que se queda a medias deja el panel roto (error 500, el log no se puede escribir).
+# Se comprueba el espacio libre ANTES de tocar nada.
+check_disk() {
+    local dir="${PANEL_DIR:-${PANEL:-/var/www/pterodactyl}}" free need=800
+    [ -d "$dir" ] || dir=/
+    free="$(df -Pm "$dir" 2>/dev/null | awk 'NR==2 {print $4}')"
+    case "$free" in ''|*[!0-9]*) return 0 ;; esac
+    if [ "$free" -lt "$need" ]; then
+        fail "El disco esta casi lleno (${free} MB libres, hacen falta ${need} MB). Libera espacio y vuelve a intentarlo. Para ver que ocupa: du -xh / --max-depth=2 2>/dev/null | sort -rh | head -20"
+    fi
+}
+
 do_install() {
+    check_disk
     require_panel
 
     if is_installed; then
@@ -240,6 +253,7 @@ do_reinstall() {
 }
 
 do_update() {
+    check_disk
     # En una máquina que solo es nodo no hay panel: se actualiza el agente.
     if [[ -z "$(detect_panel)" ]] && node_installed; then
         sync_sources
