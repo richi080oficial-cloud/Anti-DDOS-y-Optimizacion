@@ -7,7 +7,7 @@ Anti-DDoS para servidores de Minecraft en Pterodactyl, en dos capas:
 | Capa | Dónde se instala | Qué hace |
 | --- | --- | --- |
 | **Agente de nodo** (prioridad) | Cada máquina con **Wings** | Firewall `iptables` + `ipset` + `sysctl` que descarta SYN floods, UDP floods, paquetes malformados y limita las conexiones por IP **antes** de que gasten CPU. Recibe solo los bloqueos del panel. |
-| **Escudo web** | En el **panel** | Limita las peticiones por IP al panel y bloquea a quien se pasa (con duración creciente por reincidencia). **Distingue a los usuarios con sesión o clave de API válida** (admins y clientes trabajando): se cuentan por usuario con un límite alto y nunca bloquean su IP; el límite estricto es solo para visitantes anónimos. Frena la fuerza bruta del login. Opcionalmente, límites en nginx. |
+| **Escudo web** | En el **panel** | Limita las peticiones por IP al panel y bloquea a quien se pasa (con duración creciente por reincidencia). **Distingue a los usuarios con sesión o clave de API válida** (admins y clientes trabajando): se cuentan por usuario con un límite alto y nunca bloquean su IP; el límite estricto es solo para visitantes anónimos. Antes de bloquear avisa con una pausa breve, y quien es bloqueado ve una página clara que explica el motivo, con cuenta atrás y vuelta automática al panel. Frena la fuerza bruta del login. Opcionalmente, límites en nginx. |
 
 - Panel de administración propio: `/admin/extensions/antiddos` (estado, protección, bloqueos y eventos).
 - Comando `antiddos` con instalación, actualización, desinstalación y todo el control del firewall por consola.

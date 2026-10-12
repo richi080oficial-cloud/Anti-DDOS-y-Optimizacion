@@ -16,6 +16,7 @@ class BlockManager
 
     protected const IP_KEY = 'antiddos:blk:ip:';
     protected const READY_KEY = 'antiddos:blk:ready';
+    protected const WHY_KEY = 'antiddos:blk:why:';
 
     protected const MAP_TTL = 30;
 
@@ -72,6 +73,14 @@ class BlockManager
         return $exp === 0 ? 0 : $exp - time();
     }
 
+    /** @return array{0: string, 1: string}|null [origen, motivo] del bloqueo activo */
+    public function why(string $ip): ?array
+    {
+        $why = Cache::get(self::WHY_KEY . $ip);
+
+        return is_array($why) && count($why) === 2 ? [(string) $why[0], (string) $why[1]] : null;
+    }
+
     protected function index(): void
     {
         foreach ($this->map() as $ip => $exp) {
@@ -109,6 +118,12 @@ class BlockManager
         $this->flush();
         $this->remember($ip, $block->expires_at ? $block->expires_at->getTimestamp() : 0);
 
+        if ($block->expires_at) {
+            Cache::put(self::WHY_KEY . $ip, [$source, (string) $reason], $block->expires_at->getTimestamp() - time() + 60);
+        } else {
+            Cache::forever(self::WHY_KEY . $ip, [$source, (string) $reason]);
+        }
+
         ShieldEvent::record(
             in_array($source, ['auto', 'intel'], true) ? 'auto-ban' : 'ban',
             sprintf('IP %s bloqueada %s%s', $ip, $minutes === null ? 'permanentemente' : "{$minutes} min", $reason ? " ({$reason})" : ''),
@@ -136,6 +151,7 @@ class BlockManager
 
         $this->flush();
         Cache::forget(self::IP_KEY . $ip);
+        Cache::forget(self::WHY_KEY . $ip);
 
         if ($deleted) {
             ShieldEvent::record('unban', "IP {$ip} desbloqueada", $ip);
