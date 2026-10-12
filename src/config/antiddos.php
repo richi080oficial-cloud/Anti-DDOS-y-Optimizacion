@@ -16,6 +16,8 @@ return [
 
         'whitelist' => '',
 
+        'whitelist_labels' => '',
+
         'log_events' => true,
 
         'retention_days' => 14,

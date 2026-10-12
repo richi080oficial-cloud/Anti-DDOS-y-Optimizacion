@@ -96,6 +96,26 @@ HL_SMALL=(--hashlimit-htable-size 4096 --hashlimit-htable-max 65536)
 
 AMP_SPORTS="17,19,53,111,123,137,161,389,520,1900,3283,3702,5353,11211"
 
+own_ips() {
+    local list
+    list="$(ip -o -4 addr show 2>/dev/null | awk '{ for (i = 1; i <= NF; i++) if ($i == "inet") { sub(/\/.*/, "", $(i + 1)); if ($(i + 1) !~ /^127\./) print $(i + 1) } }')"
+    [[ -n "$list" ]] || list="$(hostname -I 2>/dev/null)"
+    local one
+    for one in $list; do
+        echo "$one"
+    done
+    return 0
+}
+
+refresh_own_whitelist() {
+    have ipset || return 0
+    local own
+    for own in $(own_ips); do
+        valid_ipv4 "$own" && ipset add -exist vs_white "$own"
+    done
+    return 0
+}
+
 load_whitelist() {
     ipset flush vs_white
     local entry
@@ -109,7 +129,7 @@ load_whitelist() {
         done < "$WHITELIST_FILE"
     fi
     local own
-    for own in $(hostname -I 2>/dev/null); do
+    for own in $(own_ips); do
         valid_ipv4 "$own" && ipset add -exist vs_white "$own"
     done
 }
@@ -521,7 +541,7 @@ build_heartbeat() {
     ipt -t raw -L ANTIDDOS -n >/dev/null 2>&1 && active=true
     panel_is_local && mode=local
     # shellcheck disable=SC2046
-    ips="$(json_arr $(hostname -I 2>/dev/null))"
+    ips="$(json_arr $(own_ips))"
     # shellcheck disable=SC2086
     set -- $c
     local dropped=$(( ${6:-0} + ${7:-0} + ${8:-0} + ${9:-0} + ${10:-0} + ${11:-0} + ${12:-0} ))
@@ -670,6 +690,7 @@ cmd_watch() {
 cmd_sync() {
     require_root; require_tools
     create_sets
+    refresh_own_whitelist
 
     local body sent=0
     if panel_is_local && body="$(panel_artisan sync --payload="$(build_heartbeat)" 2>&1)" && grep -qE '^[BWAC] ' <<<"$body"; then

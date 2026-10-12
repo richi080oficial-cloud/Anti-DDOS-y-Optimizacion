@@ -77,7 +77,125 @@ class AdminController extends Controller
             'hasApiKey' => (string) (ShieldSetting::read('api_key_hash') ?? '') !== '',
             'panelUrl' => rtrim((string) config('app.url'), '/'),
             'myIp' => $request->ip(),
+            'safeAuto' => $this->safe->automatic(),
+            'safeManual' => $this->protectedRows($settings),
+            'serverIps' => array_values(array_filter(
+                $this->safe->localAddresses(),
+                fn (string $ip) => !IpMatcher::isInternal($ip) && !IpMatcher::inList($ip, IpMatcher::parseList((string) $settings['whitelist']))
+            )),
         ]);
+    }
+
+    protected function protectedRows(array $settings): array
+    {
+        $labels = json_decode((string) ($settings['whitelist_labels'] ?? ''), true);
+        $labels = is_array($labels) ? $labels : [];
+        $rows = [];
+
+        foreach (IpMatcher::parseList((string) ($settings['whitelist'] ?? '')) as $entry) {
+            $rows[] = ['entry' => $entry, 'label' => (string) ($labels[$entry] ?? '')];
+        }
+
+        return $rows;
+    }
+
+    protected function tooWide(string $entry): bool
+    {
+        if (!str_contains($entry, '/')) {
+            return false;
+        }
+
+        [$net, $bits] = explode('/', $entry, 2);
+
+        return str_contains($net, ':') ? (int) $bits < 32 : (int) $bits < 16;
+    }
+
+    public function addProtected(Request $request): RedirectResponse
+    {
+        $data = $request->validate([
+            'entries' => 'required|string|max:5000',
+            'label' => 'nullable|string|max:60',
+        ]);
+
+        $entries = IpMatcher::parseList((string) $data['entries']);
+
+        if ($entries === []) {
+            return $this->tab('safe')->with('antiddos:error', 'No he encontrado ninguna IP válida. Escribe una IP o un rango por línea (por ejemplo 203.0.113.7 o 198.51.100.0/24).');
+        }
+
+        $wide = array_values(array_filter($entries, fn (string $e) => $this->tooWide($e)));
+
+        if ($wide !== []) {
+            return $this->tab('safe')->with('antiddos:error', 'Rango demasiado grande (' . implode(', ', $wide) . '): protegerlo dejaría sin defensa a media internet. Usa rangos de /16 o más pequeños.');
+        }
+
+        $list = IpMatcher::parseList((string) ShieldSetting::read('whitelist', ''));
+        $added = [];
+
+        foreach ($entries as $entry) {
+            if (!in_array($entry, $list, true)) {
+                $list[] = $entry;
+                $added[] = $entry;
+            }
+        }
+
+        $labels = json_decode((string) ShieldSetting::read('whitelist_labels', ''), true);
+        $labels = is_array($labels) ? $labels : [];
+        $label = trim((string) ($data['label'] ?? ''));
+
+        if ($label !== '') {
+            foreach ($entries as $entry) {
+                $labels[$entry] = $label;
+            }
+        }
+
+        ShieldSetting::write([
+            'whitelist' => implode("\n", $list),
+            'whitelist_labels' => json_encode($labels, JSON_UNESCAPED_UNICODE),
+        ]);
+
+        $freed = 0;
+
+        foreach ($this->blocks->active() as $block) {
+            if (IpMatcher::inList($block->ip, $entries) && $this->blocks->unblock($block->ip)) {
+                $freed++;
+            }
+        }
+
+        $this->safe->forget();
+        ShieldEvent::record('whitelist', 'IPs protegidas: ' . implode(', ', $entries), null, ['user_id' => $request->user()?->id]);
+
+        $text = $added === []
+            ? 'Esas IPs ya estaban protegidas.'
+            : count($added) . ' ' . (count($added) === 1 ? 'IP protegida' : 'IPs protegidas') . ': nunca se bloquearán (ni en el panel ni en el firewall de los nodos, en menos de un minuto).';
+
+        if ($freed > 0) {
+            $text .= " Se han desbloqueado {$freed} bloqueo(s) que tenían.";
+        }
+
+        return $this->tab('safe')->with('antiddos:success', $text);
+    }
+
+    public function removeProtected(Request $request): RedirectResponse
+    {
+        $data = $request->validate(['entry' => 'required|string|max:64']);
+
+        $list = IpMatcher::parseList((string) ShieldSetting::read('whitelist', ''));
+        $list = array_values(array_filter($list, fn (string $e) => $e !== $data['entry']));
+
+        $labels = json_decode((string) ShieldSetting::read('whitelist_labels', ''), true);
+        $labels = is_array($labels) ? $labels : [];
+        unset($labels[$data['entry']]);
+
+        ShieldSetting::write([
+            'whitelist' => implode("\n", $list),
+            'whitelist_labels' => json_encode($labels, JSON_UNESCAPED_UNICODE),
+        ]);
+
+        $this->safe->forget();
+        ShieldEvent::record('whitelist', "IP {$data['entry']} quitada de las protegidas", null, ['user_id' => $request->user()?->id]);
+
+        return $this->tab('safe')->with('antiddos:success', "{$data['entry']} ya no está en la lista de protegidas.");
     }
 
     public function updateSettings(Request $request): RedirectResponse

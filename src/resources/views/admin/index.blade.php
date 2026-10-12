@@ -148,6 +148,7 @@
             <li><a data-tab="shield">Protección</a></li>
             <li><a data-tab="ports">Puertos @if ($ports['counts']['error'] + $ports['counts']['warn'] > 0)<span class="pill {{ $ports['counts']['error'] > 0 ? 'error' : 'warn' }}">{{ $ports['counts']['error'] + $ports['counts']['warn'] }}</span>@endif</a></li>
             <li><a data-tab="asn">🚫 Operadores (ASN) ({{ $netBlocks->count() }})</a></li>
+            <li><a data-tab="safe">🛡 IPs protegidas ({{ count($safeManual) }})</a></li>
             <li><a data-tab="blocks">Bloqueos de IPs ({{ $blocks->count() }})</a></li>
             <li><a data-tab="events">Eventos</a></li>
         </ul>
@@ -715,6 +716,95 @@
                                     <pre>{{ $cfExpression }}<button type="button" class="btn btn-xs btn-default copy">Copiar</button></pre></div>
                             @endif
                         </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="pane" id="pane-safe">
+            <div class="grid">
+                <div class="col">
+                    @if (count($serverIps) > 0 || !in_array($myIp, array_column($safeManual, 'entry'), true))
+                        <div class="card" style="margin-bottom:16px;">
+                            <div class="card-h"><h3>Atajos</h3></div>
+                            <div class="card-b">
+                                @if (count($serverIps) > 0)
+                                    <form action="{{ route('admin.extensions.antiddos.protected.add') }}" method="POST" style="margin:0 0 12px;">
+                                        @csrf
+                                        <input type="hidden" name="entries" value="{{ implode("\n", $serverIps) }}">
+                                        <input type="hidden" name="label" value="Este servidor">
+                                        <p class="muted" style="margin:0 0 8px;">IPs de <b>este servidor</b> detectadas: <code>{{ implode(', ', $serverIps) }}</code></p>
+                                        <button class="btn btn-sm btn-primary" type="submit">Proteger las IPs de este servidor</button>
+                                    </form>
+                                @endif
+                                @if (!in_array($myIp, array_column($safeManual, 'entry'), true))
+                                    <form action="{{ route('admin.extensions.antiddos.protected.add') }}" method="POST" style="margin:0;">
+                                        @csrf
+                                        <input type="hidden" name="entries" value="{{ $myIp }}">
+                                        <input type="hidden" name="label" value="Mi IP">
+                                        <p class="muted" style="margin:0 0 8px;">Tu IP actual: <code>{{ $myIp }}</code></p>
+                                        <button class="btn btn-sm btn-default" type="submit">Proteger mi IP actual</button>
+                                    </form>
+                                @endif
+                            </div>
+                        </div>
+                    @endif
+                    <form action="{{ route('admin.extensions.antiddos.protected.add') }}" method="POST" class="card">
+                        @csrf
+                        <div class="card-h"><h3>Proteger IPs</h3></div>
+                        <div class="card-b">
+                            <p class="muted" style="margin-top:0;">Una IP protegida <b>nunca se bloquea</b>: ni el escudo del panel, ni el bloqueo automático, ni los operadores o países, ni el firewall de los nodos (se salta todos los límites y bloqueos). Úsalo para <b>tu propio servidor dedicado</b>, tus proxies, tu oficina o un servicio de confianza.</p>
+                            <div class="f"><label for="safe-entries">IPs o rangos (uno por línea)</label>
+                                <textarea class="form-control" id="safe-entries" name="entries" rows="5" placeholder="203.0.113.7&#10;198.51.100.0/24" required>{{ old('entries') }}</textarea>
+                                <small>Admite rangos de hasta /16 (IPv4).</small></div>
+                            <div class="f"><label for="safe-label">Nota (opcional)</label>
+                                <input class="form-control" id="safe-label" name="label" maxlength="60" placeholder="Mi dedicado, proxy, oficina…" value="{{ old('label') }}"></div>
+                        </div>
+                        <div class="card-f"><button class="btn btn-primary" type="submit">Proteger</button></div>
+                    </form>
+                </div>
+                <div class="col-2">
+                    <div class="card">
+                        <div class="card-h"><h3>IPs protegidas por ti</h3></div>
+                        <div class="tw">
+                            <table class="table">
+                                <thead><tr><th>IP o rango</th><th>Nota</th><th></th></tr></thead>
+                                <tbody>
+                                @forelse ($safeManual as $row)
+                                    <tr>
+                                        <td><code>{{ $row['entry'] }}</code></td>
+                                        <td>{{ $row['label'] !== '' ? $row['label'] : '—' }}</td>
+                                        <td>
+                                            <form action="{{ route('admin.extensions.antiddos.protected.remove') }}" method="POST" style="display:inline;" onsubmit="return confirm('¿Quitar esta IP de las protegidas? Volverá a poder bloquearse.');">
+                                                @csrf @method('DELETE')
+                                                <input type="hidden" name="entry" value="{{ $row['entry'] }}">
+                                                <button class="btn btn-xs btn-default" type="submit">Quitar</button>
+                                            </form>
+                                        </td>
+                                    </tr>
+                                @empty
+                                    <tr><td colspan="3" class="muted">Todavía no has protegido ninguna IP a mano.</td></tr>
+                                @endforelse
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="card-f small muted">Se aplica a todos los nodos en menos de un minuto. Si una IP estaba bloqueada en el panel, se desbloquea al protegerla.</div>
+                    </div>
+                    <div class="card" style="margin-top:16px;">
+                        <div class="card-h"><h3>Protegidas automáticamente</h3><span class="pill ok">{{ count($safeAuto) }}</span></div>
+                        <div class="tw">
+                            <table class="table">
+                                <thead><tr><th>IP</th><th>Motivo</th></tr></thead>
+                                <tbody>
+                                @forelse ($safeAuto as $row)
+                                    <tr><td><code>{{ $row['ip'] }}</code></td><td>{{ $row['why'] }}</td></tr>
+                                @empty
+                                    <tr><td colspan="2" class="muted">No se ha detectado ninguna todavía.</td></tr>
+                                @endforelse
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="card-f small muted">Son las IPs de este servidor, de tus nodos, de los agentes y del panel, más las redes privadas, Docker y Cloudflare. No se pueden quitar: bloquearlas dejaría el panel sin funcionar. Si falta alguna IP tuya (otra máquina, un proxy), añádela a mano.</div>
                     </div>
                 </div>
             </div>

@@ -1,6 +1,6 @@
 # Anti-DDoS y Optimización para Pterodactyl — MEMORIA DEL PROYECTO
 
-> **Lee este archivo entero antes de tocar nada.** Resume el proyecto, cómo trabaja el usuario, la arquitectura, las trampas ya conocidas y todo lo hecho en la sesión que lo creó. Versión actual del código: **1.13.7** (`VERSION`). Rama de trabajo: **`main`** (única).
+> **Lee este archivo entero antes de tocar nada.** Resume el proyecto, cómo trabaja el usuario, la arquitectura, las trampas ya conocidas y todo lo hecho en la sesión que lo creó. Versión actual del código: **1.13.8** (`VERSION`). Rama de trabajo: **`main`** (única).
 
 ---
 
@@ -67,7 +67,7 @@ src/                           ← se copia a <panel>/app/Extensions/AntiDDoS  (
   Http/Controllers/Admin/AdminController.php   TODA la pantalla de admin (index + acciones)
   Http/Controllers/Api/{Feed,Heartbeat,Live}Controller.php   API para agentes remotos
   Services/BlockManager.php     bloqueos (BD + caché), feed para nodos (líneas B/W/C)
-  Services/SafeIps.php          IPs que NUNCA se bloquean (infraestructura, Cloudflare, lista blanca, privadas, la tuya)
+  Services/SafeIps.php          IPs que NUNCA se bloquean: `automatic()` (nodos, agentes, panel y **las IPs de esta máquina** leídas de /proc/net/fib_trie), Cloudflare, privadas, lista de IPs protegidas y la tuya
   Services/HealthCheck.php      «¿está todo instalado?» (panel + estado de cada nodo)
   Services/AgentRegistry.php    guarda/sanea latidos de agentes + muestras para el historial
   Services/MinecraftPorts.php   detecta eggs de Minecraft y compacta puertos (límite iptables multiport = 15)
@@ -113,6 +113,7 @@ src/                           ← se copia a <panel>/app/Extensions/AntiDDoS  (
 - **Estado** (`HealthCheck`): tablas, escudo, clave, caché Redis, IP real (Cloudflare/privada), listas de reputación, y el agente de cada nodo (por IP del FQDN o por host; con 1 nodo y 1 agente se emparejan solos).
 - **Puertos**: `PortAdvisor` valora; `PortChanger` mueve la allocation (misma IP/nodo, libera la antigua, `sync()` a Wings, reinicio opcional). Rango recomendado 20000–32000 (configurable en la UI), evita 8000–8999 y puertos por defecto.
 - **IpIntel**: geo vía ipwho.is (respaldo ipapi.co); listas públicas (Blocklist.de, Spamhaus DROP, FireHOL L1, CINS, Tor); AbuseIPDB opcional (clave cifrada con `Crypt`). Veredicto `clean|suspicious|malicious|unknown`; **nunca «normal» sin poder comprobarlo**. `peek()` no bloquea: encola la consulta con `app()->terminating`.
+- **IPs protegidas** (pestaña `#safe`, desde 1.13.8): reutiliza el ajuste `whitelist` («nunca se bloquea»: escudo web, auto-bloqueo, ASN/países y firewall de los nodos vía líneas `W`) y añade notas en `whitelist_labels` (JSON). Rutas `protected.add|remove`; rechaza rangos mayores de /16 (IPv4) o /32 (IPv6); al proteger desbloquea lo que ya estuviera bloqueado. Atajos: «IPs de este servidor» (`SafeIps::localAddresses`) y «mi IP». El agente ahora protege **todas** sus IPs (`own_ips()` con `ip -o -4 addr`, también secundarias/failover) al aplicar y **cada 30 s** (`refresh_own_whitelist` en `cmd_sync`) y las manda en el latido.
 - **Falsos positivos**: `SafeIps::protectedReason` impide bloquear (manual, CLI, escudo web) nodos, agentes, panel, Cloudflare, lista blanca, privadas y la IP del admin. Botón «Es legítima» = lista blanca + desbloqueo.
 
 ### 4.3 Base de datos (prefijo `antiddos_`)
@@ -216,6 +217,7 @@ sudo antiddos status ; systemctl is-active antiddos-live
 | 1.13.2–1.13.4 | (otra sesión) Comprobación de espacio en disco antes de instalar/actualizar y limpieza de `/opt/antiddos` al terminar (queda solo el kit mínimo del desinstalador). |
 | 1.13.5 | Petición: «de cada archivo revísalo entero y borra sus comentarios». Quitados todos los comentarios de PHP (~400, con el tokenizador de `php-parser`; mismo árbol de sintaxis antes/después), Blade (23: `{{-- --}}`, CSS y JS; mismos 8.482 tokens de JS) y bash (~190; lector con pila para comillas, `$( )`, `${ }` y heredocs). Se **conservan** las directivas `# shellcheck`, el `#!` y el texto que los scripts *escriben* en archivos generados (`agent.conf`, sysctl, nginx) y un comentario de `awk` dentro de una cadena. Markdown y JSON intactos. Sin cambios de comportamiento. |
 | 1.13.7 | Petición: «afinar la diferencia entre un usuario del panel haciendo muchas acciones y un DDoS» + «haz más estética la página de por qué te han bloqueado» (ejemplo: página de mantenimiento de Hovys Theme). Escudo: 429 suave antes del bloqueo, IP de confianza, reincidencia en minutos distintos (ver §4.2). Nueva `Support/BlockPage` (HTML autocontenido, oscuro con brillos, icono de escudo, motivo, cuenta atrás con barra y recarga automática; variantes por motivo: exceso, login, ritmo, manual, reputación, red). Las respuestas JSON/API conservan su formato. Sintaxis verificada y página revisada en el navegador; no probado en servidor real. |
+| 1.13.8 | Petición: «el dedicado propio se autobloquea; haz una sección en el panel para proteger la IP». Nueva pestaña **🛡 IPs protegidas** (manual con notas + lista de las automáticas con su motivo + atajos «IPs de este servidor» y «mi IP»). `SafeIps::automatic()` ahora incluye las IPs de la propia máquina. Agente: `own_ips()`/`refresh_own_whitelist()` (antes solo `hostname -I` al aplicar las reglas). Causa exacta del autobloqueo **no confirmada** en el servidor del usuario: se cubren las vías conocidas (IP propia no reconocida por el panel o por el firewall, IPs secundarias/failover). Sintaxis verificada + simulación de `own_ips` y del lector de fib_trie; no probado en servidor real. |
 Decisiones del usuario a recordar: quitar la optimización; una sola rama; el nombre se queda; quería ver **por qué** se bloquea cada cosa y evitar bloqueos sin sentido; quiere datos **precisos y veraces** en la gráfica.
 
 ---

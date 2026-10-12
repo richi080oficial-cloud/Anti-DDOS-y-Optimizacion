@@ -31,6 +31,9 @@ Route::middleware(['web', 'auth', AdminAuthenticate::class])
         Route::post('/intel/recheck', [AdminController::class, 'recheckIp'])->middleware('throttle:20,1')->name('intel.recheck');
         Route::post('/whitelist', [AdminController::class, 'whitelistIp'])->middleware('throttle:30,1')->name('whitelist.add');
 
+        Route::post('/protected', [AdminController::class, 'addProtected'])->middleware('throttle:30,1')->name('protected.add');
+        Route::delete('/protected', [AdminController::class, 'removeProtected'])->middleware('throttle:30,1')->name('protected.remove');
+
         Route::get('/traffic', [AdminController::class, 'trafficData'])->middleware('throttle:300,1')->name('traffic');
 
         Route::post('/ports/change', [AdminController::class, 'changePort'])->middleware('throttle:20,1')->name('ports.change');
