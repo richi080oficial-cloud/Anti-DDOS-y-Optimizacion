@@ -768,6 +768,15 @@ class AdminController extends Controller
             ->with('antiddos:success', "IP {$data['ip']} desbloqueada.");
     }
 
+    public function requestNodeUpdate(Request $request, ShieldAgent $agent): RedirectResponse
+    {
+        $this->blocks->requestNodeUpdate($agent->host);
+        ShieldEvent::record('node-update', "Actualización del agente pedida para {$agent->host}", $request->ip(), ['user_id' => $request->user()?->id]);
+
+        return $this->tab('nodes')
+            ->with('antiddos:success', "Actualización pedida para {$agent->host}: se aplicará sola en menos de 30 s (se descarga de este mismo panel, sin tocar GitHub).");
+    }
+
     public function rotateKey(Request $request): RedirectResponse
     {
         $key = Str::random(48);

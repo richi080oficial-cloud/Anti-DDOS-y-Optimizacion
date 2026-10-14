@@ -420,11 +420,22 @@ panel_is_local() { [[ -n "$PANEL_DIR" && -f "$PANEL_DIR/artisan" ]] && have php;
 
 fetch_feed() {
     if panel_is_local; then
-        panel_artisan feed 2>&1
+        panel_artisan feed --host="$(hostname)" 2>&1
         return
     fi
     have curl || { echo "curl no esta instalado"; return 1; }
-    curl -fsS --max-time 20 -H "X-Antiddos-Key: ${API_KEY}" "${PANEL_URL%/}/api/antiddos/feed" 2>&1
+    curl -fsS --max-time 20 -G --data-urlencode "host=$(hostname)" -H "X-Antiddos-Key: ${API_KEY}" "${PANEL_URL%/}/api/antiddos/feed" 2>&1
+}
+
+request_self_update() {
+    local lock="/run/antiddos/update.lock"
+    [[ -f "$lock" ]] && return 0
+    command -v antiddos >/dev/null 2>&1 || { log "actualizacion pedida desde el panel, pero no se encuentra el comando antiddos"; return 0; }
+    mkdir -p /run/antiddos /var/log/antiddos 2>/dev/null || true
+    log "actualizacion del agente pedida desde el panel: se lanza en segundo plano"
+    ( touch "$lock" 2>/dev/null; antiddos update --force >> /var/log/antiddos/self-update.log 2>&1; rm -f "$lock" 2>/dev/null ) \
+        < /dev/null > /dev/null 2>&1 &
+    disown 2>/dev/null || true
 }
 
 conf_get() { grep -m1 -E "^$1=" "$CONF" 2>/dev/null | cut -d= -f2- | tr -d '"'; }
@@ -460,7 +471,7 @@ sync_feed() {
         return 1
     fi
 
-    if [[ -n "$body" ]] && ! grep -qE '^[BWAC] ' <<<"$body"; then
+    if [[ -n "$body" ]] && ! grep -qE '^[BWACU] ' <<<"$body"; then
         warn "Respuesta del panel no válida: ${body:0:200}"
         log "feed: respuesta no valida"
         return 1
@@ -488,6 +499,7 @@ sync_feed() {
                 W) valid_ipv4 "${addr:-x}" && { echo "add vs_white_feed_tmp ${addr}"; whites=$((whites + 1)); } ;;
                 A) valid_ipv4 "${addr:-x}" && [[ "$addr" == */* && "${addr#*/}" -ge 8 ]] && { echo "add vs_asn_tmp ${addr}"; nets=$((nets + 1)); } ;;
                 C) apply_remote_setting "${addr:-}" "${val:-}" >&2 ;;
+                U) [[ "${addr:-}" == "1" ]] && request_self_update >&2 ;;
             esac
         done <<<"$body"
     } > "$restore"
@@ -693,7 +705,7 @@ cmd_sync() {
     refresh_own_whitelist
 
     local body sent=0
-    if panel_is_local && body="$(panel_artisan sync --payload="$(build_heartbeat)" 2>&1)" && grep -qE '^[BWAC] ' <<<"$body"; then
+    if panel_is_local && body="$(panel_artisan sync --host="$(hostname)" --payload="$(build_heartbeat)" 2>&1)" && grep -qE '^[BWACU] ' <<<"$body"; then
         sync_feed "$body" || true
         sent=1
     else

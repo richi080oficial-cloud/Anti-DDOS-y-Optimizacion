@@ -197,7 +197,9 @@ class BlockManager
         Cache::forget(self::CACHE_KEY);
     }
 
-    public function feed(): string
+    public const UPDATE_REQ_KEY = 'antiddos:update-req:';
+
+    public function feed(?string $host = null): string
     {
         $lines = [];
 
@@ -251,6 +253,17 @@ class BlockManager
             }
         }
 
+        $host = trim((string) $host);
+
+        if ($host !== '' && Cache::pull(self::UPDATE_REQ_KEY . md5(strtolower($host)))) {
+            $lines[] = 'U 1';
+        }
+
         return implode("\n", $lines) . ($lines ? "\n" : '');
+    }
+
+    public function requestNodeUpdate(string $host): void
+    {
+        Cache::put(self::UPDATE_REQ_KEY . md5(strtolower(trim($host))), true, now()->addHours(2));
     }
 }

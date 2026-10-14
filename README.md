@@ -97,6 +97,8 @@ Qué hace el instalador del nodo (`scripts/node-agent.sh`):
 
 Si ya estaba instalado, el instalador del panel ofrece **Reinstalar** (no toca la base de datos), **Actualizar** o **Cancelar**, igual que ServerSplitter.
 
+Para actualizar el agente de un nodo remoto **sin entrar por SSH**, en **Admin → Anti-DDoS y Optimización → Estado** cada nodo con el agente ya instalado tiene un botón **«Actualizar agente ahora»**: lo pide el panel y el propio nodo se descarga la versión nueva de aquí mismo (nunca de GitHub) en menos de 30 s, la próxima vez que sincroniza.
+
 ## Comandos
 
 | Comando | Descripción |

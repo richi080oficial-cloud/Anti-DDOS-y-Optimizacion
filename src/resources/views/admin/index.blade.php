@@ -187,6 +187,12 @@
                                                 @endif
                                             </div>
                                         @endif
+                                        @if ($n['agent'])
+                                            <form action="{{ route('admin.extensions.antiddos.nodes.update', $n['agent']->id) }}" method="POST" style="margin-top:4px;">
+                                                @csrf
+                                                <button type="submit" class="btn btn-xs btn-default">Actualizar agente ahora</button>
+                                            </form>
+                                        @endif
                                     </div>
                                 </div>
                             @empty

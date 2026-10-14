@@ -31,7 +31,8 @@ class ShieldCommand extends Command
                             {--minutes= : Duracion del bloqueo en minutos (ban); vacio = permanente}
                             {--hours= : Duracion del bloqueo en horas (asn/country); vacio = permanente}
                             {--reason= : Motivo del bloqueo (ban)}
-                            {--payload= : JSON del latido (lo envia el agente de nodo local)}';
+                            {--payload= : JSON del latido (lo envia el agente de nodo local)}
+                            {--host= : Nombre del host que pide el feed (lo envia el agente de nodo local)}';
 
     protected $description = 'Utilidades internas de Anti-DDoS y Optimización (usadas por el CLI antiddos).';
 
@@ -255,7 +256,7 @@ class ShieldCommand extends Command
 
     protected function feed(BlockManager $blocks): int
     {
-        $this->getOutput()->write($blocks->feed());
+        $this->getOutput()->write($blocks->feed((string) $this->option('host')));
 
         return self::SUCCESS;
     }
