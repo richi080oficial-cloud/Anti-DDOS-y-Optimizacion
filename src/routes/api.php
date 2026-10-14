@@ -7,7 +7,7 @@ use Pterodactyl\Extensions\AntiDDoS\Http\Controllers\Api\HeartbeatController;
 use Pterodactyl\Extensions\AntiDDoS\Http\Controllers\Api\LiveController;
 use Pterodactyl\Extensions\AntiDDoS\Http\Middleware\ShieldApiKey;
 
-Route::middleware(['api', 'throttle:300,1', ShieldApiKey::class])
+Route::middleware(['throttle:300,1', ShieldApiKey::class])
     ->prefix('api/antiddos')
     ->name('antiddos.api.')
     ->group(function () {
