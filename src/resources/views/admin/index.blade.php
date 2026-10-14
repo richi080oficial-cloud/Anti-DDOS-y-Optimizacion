@@ -17,7 +17,7 @@
     @php
         $matchedIds = collect($health['nodes'])->pluck('agent.id')->filter()->all();
         $otherAgents = $health['agents']->reject(fn ($a) => in_array($a->id, $matchedIds, true));
-        $ik = session('antiddos:newkey') ?: 'TU_CLAVE';
+        $ik = session('antiddos:newkey') ?: ($apiKey ?: 'TU_CLAVE');
         $ipurl = $panelUrl ?: 'https://tu-panel';
         $itcp = $fw['tcp'] ?: '25565';
         $installCmd = 'd=$(mktemp -d) && curl -fsSL -H "X-Antiddos-Key: ' . $ik . '" ' . $ipurl . '/api/antiddos/agent-bundle'
@@ -109,7 +109,7 @@
             <div class="alert e">@foreach ($errors->all() as $error)<div>{{ $error }}</div>@endforeach</div>
         @endif
         @if (session('antiddos:newkey'))
-            <div class="alert w"><b>Nueva clave de la API</b> (cópiala ahora, no se vuelve a mostrar):<pre>{{ session('antiddos:newkey') }}</pre></div>
+            <div class="alert w"><b>Nueva clave de la API</b> (ya puedes verla cuando quieras en el comando de «Añadir un nodo»):<pre>{{ session('antiddos:newkey') }}</pre></div>
         @endif
 
         <div class="card hero {{ $health['level'] }}">
@@ -200,7 +200,13 @@
                         <div class="card-b">
                             <p class="muted">En cada máquina con Wings que <b>no sea</b> este panel, ejecuta como root:</p>
                             <pre>{{ $installCmd }}<button type="button" class="btn btn-xs btn-default copy">Copiar</button></pre>
-                            <p class="muted small" style="margin:0;">Si el panel y Wings están en la misma máquina no hace falta: ya se instaló con <code>install-all</code>. La clave se muestra al regenerarla en la pestaña Protección.</p>
+                            @if ($apiKey)
+                                <p class="muted small" style="margin:0;">Si el panel y Wings están en la misma máquina no hace falta: ya se instaló con <code>install-all</code>.</p>
+                            @elseif ($hasApiKey)
+                                <p class="muted small" style="margin:0;">Tu clave se generó antes de que el panel pudiera guardarla para mostrarla aquí: pulsa <b>Regenerar clave</b> en la pestaña Protección una vez y este comando se rellenará solo (después tendrás que poner la clave nueva en los nodos que ya tengas, con este mismo comando).</p>
+                            @else
+                                <p class="muted small" style="margin:0;">Primero pulsa <b>Generar clave</b> en la pestaña Protección: este comando se rellenará solo.</p>
+                            @endif
                         </div>
                     </div>
                 </div>

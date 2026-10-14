@@ -7,6 +7,7 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
@@ -52,6 +53,20 @@ class AdminController extends Controller
         return redirect(route('admin.extensions.antiddos.index') . '#' . $tab);
     }
 
+    protected function currentApiKey(): string
+    {
+        $enc = (string) (ShieldSetting::read('api_key_enc') ?? '');
+        if ($enc === '') {
+            return '';
+        }
+
+        try {
+            return Crypt::decryptString($enc);
+        } catch (\Throwable $e) {
+            return '';
+        }
+    }
+
     public function index(Request $request): View
     {
         $settings = ShieldSetting::snapshot();
@@ -75,6 +90,7 @@ class AdminController extends Controller
             'cfExpression' => $this->nets->cloudflareExpression(),
             'events' => ShieldEvent::query()->orderByDesc('id')->limit(150)->get(),
             'hasApiKey' => (string) (ShieldSetting::read('api_key_hash') ?? '') !== '',
+            'apiKey' => $this->currentApiKey(),
             'panelUrl' => rtrim((string) config('app.url'), '/'),
             'myIp' => $request->ip(),
             'safeAuto' => $this->safe->automatic(),
@@ -769,11 +785,14 @@ class AdminController extends Controller
     {
         $key = Str::random(48);
 
-        ShieldSetting::write(['api_key_hash' => password_hash($key, PASSWORD_DEFAULT)]);
+        ShieldSetting::write([
+            'api_key_hash' => password_hash($key, PASSWORD_DEFAULT),
+            'api_key_enc' => Crypt::encryptString($key),
+        ]);
         ShieldEvent::record('apikey', 'Clave de la API regenerada', $request->ip(), ['user_id' => $request->user()?->id]);
 
         return $this->tab('nodes')
-            ->with('antiddos:success', 'Clave nueva generada. Cópiala ahora: no se vuelve a mostrar. Los nodos con la clave anterior dejarán de sincronizar hasta que la actualices.')
+            ->with('antiddos:success', 'Clave nueva generada. A partir de ahora puedes verla y copiarla cuando quieras en esta pantalla. Los nodos con la clave anterior dejarán de sincronizar hasta que la actualices en ellos.')
             ->with('antiddos:newkey', $key);
     }
 

@@ -3,6 +3,7 @@
 namespace Pterodactyl\Extensions\AntiDDoS\Console\Commands;
 
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldBlock;
@@ -107,11 +108,14 @@ class ShieldCommand extends Command
 
         $key = (string) ($this->option('key') ?: Str::random(48));
 
-        ShieldSetting::write(['api_key_hash' => password_hash($key, PASSWORD_DEFAULT)]);
+        ShieldSetting::write([
+            'api_key_hash' => password_hash($key, PASSWORD_DEFAULT),
+            'api_key_enc' => Crypt::encryptString($key),
+        ]);
 
         $this->newLine();
         $this->line('<info>Clave de API de Anti-DDoS y Optimización generada.</info>');
-        $this->line('Guardala ahora, no se puede volver a mostrar:');
+        $this->line('También podrás verla luego en Admin → Anti-DDoS y Optimización:');
         $this->newLine();
         $this->line("  <comment>$key</comment>");
         $this->newLine();
