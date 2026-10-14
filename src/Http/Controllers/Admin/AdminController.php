@@ -53,20 +53,6 @@ class AdminController extends Controller
         return redirect(route('admin.extensions.antiddos.index') . '#' . $tab);
     }
 
-    protected function currentApiKey(): string
-    {
-        $enc = (string) (ShieldSetting::read('api_key_enc') ?? '');
-        if ($enc === '') {
-            return '';
-        }
-
-        try {
-            return Crypt::decryptString($enc);
-        } catch (\Throwable $e) {
-            return '';
-        }
-    }
-
     public function index(Request $request): View
     {
         $settings = ShieldSetting::snapshot();
@@ -90,7 +76,8 @@ class AdminController extends Controller
             'cfExpression' => $this->nets->cloudflareExpression(),
             'events' => ShieldEvent::query()->orderByDesc('id')->limit(150)->get(),
             'hasApiKey' => (string) (ShieldSetting::read('api_key_hash') ?? '') !== '',
-            'apiKey' => $this->currentApiKey(),
+            'apiKey' => ($hc = app(HealthCheck::class))->apiKey(),
+            'installCmd' => $hc->bootstrapCommand(true),
             'panelUrl' => rtrim((string) config('app.url'), '/'),
             'myIp' => $request->ip(),
             'safeAuto' => $this->safe->automatic(),

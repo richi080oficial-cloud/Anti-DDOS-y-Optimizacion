@@ -4,6 +4,7 @@ namespace Pterodactyl\Extensions\AntiDDoS\Services;
 
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Schema;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldAgent;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldSetting;
@@ -80,6 +81,39 @@ class HealthCheck
         return trim((string) @file_get_contents(__DIR__ . '/../VERSION')) ?: 'dev';
     }
 
+    public function apiKey(): string
+    {
+        $enc = (string) (ShieldSetting::read('api_key_enc') ?? '');
+        if ($enc === '') {
+            return '';
+        }
+
+        try {
+            return Crypt::decryptString($enc);
+        } catch (\Throwable $e) {
+            return '';
+        }
+    }
+
+    public function bootstrapCommand(bool $placeholderFallback = false): string
+    {
+        $key = $this->apiKey();
+        $url = rtrim((string) config('app.url'), '/');
+
+        if (($key === '' || $url === '') && !$placeholderFallback) {
+            return '';
+        }
+
+        $key = $key !== '' ? $key : 'TU_CLAVE';
+        $url = $url !== '' ? $url : 'https://tu-panel';
+        $tcp = (string) (ShieldSetting::read('fw_tcp_ports') ?: '25565');
+
+        return 'd=$(mktemp -d); http=$(curl -sS -w "%{http_code}" -o "$d/bundle.tar.gz" -H "X-Antiddos-Key: ' . $key . '" ' . $url . '/api/antiddos/agent-bundle);'
+            . ' if [ "$http" != "200" ]; then echo "El panel respondió HTTP $http:"; cat "$d/bundle.tar.gz" 2>/dev/null; echo; rm -rf "$d"; false;'
+            . ' else tar xzf "$d/bundle.tar.gz" -C "$d" && bash "$d/scripts/node-agent.sh" install --tcp=' . $tcp . ' --panel-url=' . $url . ' --key=' . $key
+            . ' && install -m 0755 "$d/antiddos.sh" /usr/local/bin/antiddos; rm -rf "$d"; fi';
+    }
+
     protected function nodes(Collection $agents, string $version): array
     {
         try {
@@ -94,10 +128,11 @@ class HealthCheck
             $agent = $this->matchAgent($node, $agents, $nodes->count());
 
             if ($agent === null) {
+                $cmd = $this->bootstrapCommand();
                 $out[] = [
                     'name' => $node->name, 'fqdn' => $node->fqdn, 'agent' => null, 'level' => 'error',
                     'detail' => 'No hay ningún agente conectado: este nodo NO está protegido.',
-                    'fix' => 'sudo antiddos node-install',
+                    'fix' => $cmd !== '' ? $cmd : 'Genera la clave de la API en la pestaña Protección: ahí saldrá el comando listo para copiar en este nodo.',
                 ];
 
                 continue;
