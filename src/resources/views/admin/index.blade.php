@@ -20,9 +20,10 @@
         $ik = session('antiddos:newkey') ?: ($apiKey ?: 'TU_CLAVE');
         $ipurl = $panelUrl ?: 'https://tu-panel';
         $itcp = $fw['tcp'] ?: '25565';
-        $installCmd = 'd=$(mktemp -d) && curl -fsSL -H "X-Antiddos-Key: ' . $ik . '" ' . $ipurl . '/api/antiddos/agent-bundle'
-            . ' | tar xz -C "$d" && bash "$d/scripts/node-agent.sh" install --tcp=' . $itcp . ' --panel-url=' . $ipurl . ' --key=' . $ik
-            . ' && install -m 0755 "$d/antiddos.sh" /usr/local/bin/antiddos && rm -rf "$d"';
+        $installCmd = 'd=$(mktemp -d); http=$(curl -sS -w "%{http_code}" -o "$d/bundle.tar.gz" -H "X-Antiddos-Key: ' . $ik . '" ' . $ipurl . '/api/antiddos/agent-bundle);'
+            . ' if [ "$http" != "200" ]; then echo "El panel respondió HTTP $http:"; cat "$d/bundle.tar.gz" 2>/dev/null; echo; rm -rf "$d"; false;'
+            . ' else tar xzf "$d/bundle.tar.gz" -C "$d" && bash "$d/scripts/node-agent.sh" install --tcp=' . $itcp . ' --panel-url=' . $ipurl . ' --key=' . $ik
+            . ' && install -m 0755 "$d/antiddos.sh" /usr/local/bin/antiddos; rm -rf "$d"; fi';
     @endphp
 
     <style>
