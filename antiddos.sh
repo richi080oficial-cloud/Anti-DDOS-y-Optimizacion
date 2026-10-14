@@ -251,7 +251,12 @@ do_reinstall() {
     sync_sources
     run_installer install
     install_cli
+    if node_installed; then
+        info "Actualizando también el agente de este nodo…"
+        bash "$(kit_dir)/$NODE_REL" install --yes
+    fi
     ok "Extensión reinstalada. No se ha borrado ningún dato."
+    slim_sources
 }
 
 do_update() {
