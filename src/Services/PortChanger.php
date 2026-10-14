@@ -1,0 +1,164 @@
+<?php
+
+namespace Pterodactyl\Extensions\AntiDDoS\Services;
+
+use Illuminate\Support\Facades\DB;
+use Pterodactyl\Extensions\AntiDDoS\Models\ShieldEvent;
+use Pterodactyl\Models\Allocation;
+use Pterodactyl\Models\Node;
+use Pterodactyl\Models\Server;
+use Pterodactyl\Repositories\Wings\DaemonPowerRepository;
+use Pterodactyl\Repositories\Wings\DaemonServerRepository;
+
+class PortChanger
+{
+    public function __construct(protected PortAdvisor $advisor)
+    {
+    }
+
+    public function suggest(Server $server, array $exclude = [], int $min = PortAdvisor::SAFE_MIN, int $max = PortAdvisor::SAFE_MAX): ?int
+    {
+        $min = max(1024, min($min, $max));
+        $max = min(65535, max($min, $max));
+
+        $current = Allocation::query()->find($server->allocation_id);
+
+        if ($current === null) {
+            return null;
+        }
+
+        $reserved = $this->reserved($current->node_id);
+        $ok = fn (int $p) => !in_array($p, $exclude, true) && !in_array($p, $reserved, true) && !isset(PortAdvisor::SERVICE_PORTS[$p]) && !isset(PortAdvisor::DEFAULT_PORTS[$p]) && !($p >= 8000 && $p <= 8999);
+
+        $free = Allocation::query()
+            ->where('node_id', $current->node_id)->where('ip', $current->ip)->whereNull('server_id')
+            ->whereBetween('port', [$min, $max])
+            ->pluck('port')->map(fn ($p) => (int) $p)->filter($ok)->values()->all();
+
+        if ($free !== []) {
+            return $free[array_rand($free)];
+        }
+
+        $taken = Allocation::query()->where('node_id', $current->node_id)->where('ip', $current->ip)->pluck('port')->flip();
+
+        for ($i = 0; $i < 300; $i++) {
+            $p = random_int($min, $max);
+
+            if (!isset($taken[$p]) && $ok($p)) {
+                return $p;
+            }
+        }
+
+        return null;
+    }
+
+    public function change(Server $server, int $port, bool $restart = false, ?int $userId = null): array
+    {
+        $report = ['ok' => [], 'warn' => []];
+        $old = Allocation::query()->find($server->allocation_id);
+
+        if ($old === null) {
+            $report['warn'][] = 'El servidor no tiene asignación principal.';
+
+            return $report;
+        }
+
+        if ((int) $old->port === $port) {
+            $report['ok'][] = "Ya usa el puerto {$port}.";
+
+            return $report;
+        }
+
+        $error = $this->validate($port, $old);
+
+        if ($error !== null) {
+            $report['warn'][] = $error;
+
+            return $report;
+        }
+
+        $existing = Allocation::query()
+            ->where('node_id', $old->node_id)->where('ip', $old->ip)->where('port', $port)->first();
+
+        if ($existing !== null && $existing->server_id !== null && (int) $existing->server_id !== (int) $server->id) {
+            $report['warn'][] = "El puerto {$port} ya lo usa otro servidor en este nodo.";
+
+            return $report;
+        }
+
+        DB::transaction(function () use ($server, $old, $port, $existing) {
+            $new = $existing ?? (new Allocation())->forceFill([
+                'node_id' => $old->node_id,
+                'ip' => $old->ip,
+                'ip_alias' => $old->ip_alias,
+                'port' => $port,
+            ]);
+            $new->forceFill(['server_id' => $server->id])->save();
+
+            $server->forceFill(['allocation_id' => $new->id])->save();
+
+            $old->forceFill(['server_id' => null])->save();
+        });
+
+        $report['ok'][] = "Puerto cambiado de {$old->port} a {$port}.";
+
+        try {
+            app(DaemonServerRepository::class)->setServer($server->refresh())->sync();
+        } catch (\Throwable $e) {
+            $report['warn'][] = 'No se pudo avisar a Wings ahora; se sincronizará al reiniciar el servidor.';
+        }
+
+        if ($restart) {
+            $this->restartIfRunning($server, $report);
+        } else {
+            $report['ok'][] = 'El cambio surte efecto al reiniciar el servidor.';
+        }
+
+        ShieldEvent::record(
+            'port',
+            sprintf('Puerto de %s (#%d) cambiado de %d a %d', $server->name, $server->id, $old->port, $port),
+            null,
+            ['server_id' => $server->id, 'user_id' => $userId, 'from' => (int) $old->port, 'to' => $port]
+        );
+
+        return $report;
+    }
+
+    public function validate(int $port, Allocation $current): ?string
+    {
+        if ($port < 1024 || $port > 65535) {
+            return 'El puerto debe estar entre 1024 y 65535.';
+        }
+
+        if (isset(PortAdvisor::SERVICE_PORTS[$port]) || in_array($port, $this->reserved($current->node_id), true)) {
+            return "El puerto {$port} lo usa un servicio del sistema o de Wings.";
+        }
+
+        return null;
+    }
+
+    protected function reserved(int $nodeId): array
+    {
+        $node = Node::query()->find($nodeId, ['id', 'daemonListen', 'daemonSFTP']);
+
+        return $node === null ? [] : [(int) $node->daemonListen, (int) $node->daemonSFTP];
+    }
+
+    protected function restartIfRunning(Server $server, array &$report): void
+    {
+        try {
+            $details = app(DaemonServerRepository::class)->setServer($server)->getDetails();
+
+            if (($details['state'] ?? null) !== 'running') {
+                $report['ok'][] = 'El servidor no estaba encendido: el puerto nuevo se usará al arrancar.';
+
+                return;
+            }
+
+            app(DaemonPowerRepository::class)->setServer($server)->send('restart');
+            $report['ok'][] = 'Servidor reiniciado con el puerto nuevo.';
+        } catch (\Throwable $e) {
+            $report['warn'][] = 'No se pudo reiniciar el servidor: ' . mb_substr($e->getMessage(), 0, 160);
+        }
+    }
+}

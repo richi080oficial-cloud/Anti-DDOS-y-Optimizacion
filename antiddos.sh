@@ -1,21 +1,8 @@
 #!/usr/bin/env bash
-#
-# Anti-DDoS y Optimización — gestor (instalar / actualizar / desinstalar / estado / anti-DDoS)
-# Autor: Vexa Studio · Licencia: MIT
-#
-#   PANEL:  bash <(curl -sSL .../install.sh) install
-#   NODO:   bash <(curl -sSL .../install.sh) node-install
-#   sudo antiddos update
-#   sudo antiddos attack-on
-#   sudo antiddos ban 1.2.3.4
-#   sudo antiddos uninstall --drop-data
-#
 set -Eeuo pipefail
 
 REPO_BRANCH="${REPO_BRANCH:-main}"
 SRC_DIR="${SRC_DIR:-/opt/antiddos}"
-# Si el codigo ya esta clonado (p. ej. por SSH con una deploy key en un repo
-# privado) se conserva su "origin" en vez de volver a la URL https publica.
 if [[ -z "${REPO_URL:-}" && -z "${ANTIDDOS_REPO:-}" && -d "$SRC_DIR/.git" ]]; then
     REPO_URL="$(git -C "$SRC_DIR" remote get-url origin 2>/dev/null || true)"
 fi
@@ -29,14 +16,14 @@ CRON_MARKER="antiddos-autoupdate"
 LOG_FILE="/var/log/antiddos-update.log"
 TARGET_REL="app/Extensions/AntiDDoS"
 FW_BIN="/usr/local/sbin/antiddos-fw"
-TUNE_BIN="/usr/local/sbin/antiddos-tune"
 
 PANEL_DIR="${PANEL_DIR:-}"
 WEB_USER="${WEB_USER:-}"
 FORCE="${FORCE:-0}"
 DROP_DATA="${DROP_DATA:-0}"
 API_KEY=""
-PASSTHRU=()      # opciones sin reconocer: se pasan tal cual a los scripts hijos
+NODE_PANEL_URL=""
+PASSTHRU=()
 
 if [ -t 1 ]; then
     RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'
@@ -54,7 +41,6 @@ trap 'fail "El gestor se detuvo en la línea $LINENO."' ERR
 
 [[ $EUID -eq 0 ]] || fail "Ejecútalo como root: añade sudo delante del comando."
 
-# ── Detección del panel ───────────────────────────────────────────────────────
 detect_panel() {
     if [[ -n "$PANEL_DIR" ]]; then echo "${PANEL_DIR%/}"; return; fi
     if [[ -f "$STATE_FILE" ]]; then
@@ -77,7 +63,6 @@ require_panel() {
     ok "Panel detectado en: $PANEL"
 }
 
-# ── Dependencias ──────────────────────────────────────────────────────────────
 pkg_install() {
     local pkg="$1"
     if command -v apt-get >/dev/null 2>&1; then
@@ -101,13 +86,16 @@ require_cmd() {
     ok "$pkg instalado."
 }
 
-# ── Descargar / actualizar el código fuente ───────────────────────────────────
+kit_dir() {
+    if [[ -f "$SRC_DIR/$NODE_REL" ]]; then echo "$SRC_DIR"; else echo "$STATE_DIR/source"; fi
+}
+
 sync_sources() {
     require_cmd git
     if [[ -d "$SRC_DIR/.git" ]]; then
         info "Actualizando el código en $SRC_DIR…"
         git -C "$SRC_DIR" remote set-url origin "$REPO_URL"
-        git -C "$SRC_DIR" fetch --quiet origin "$REPO_BRANCH"
+        git -C "$SRC_DIR" fetch --quiet --depth 1 origin "+refs/heads/$REPO_BRANCH:refs/remotes/origin/$REPO_BRANCH"
         git -C "$SRC_DIR" reset --hard --quiet "origin/$REPO_BRANCH"
         git -C "$SRC_DIR" clean -fd --quiet
     else
@@ -116,7 +104,6 @@ sync_sources() {
         git clone --quiet --branch "$REPO_BRANCH" --depth 1 "$REPO_URL" "$SRC_DIR"
     fi
 
-    # Normalizar saltos de línea por si el repo se editó desde Windows.
     find "$SRC_DIR" -name '*.sh' -print0 | xargs -0 -r sed -i 's/\r$//'
     [[ -f "$SRC_DIR/bin/antiddos" ]] && sed -i 's/\r$//' "$SRC_DIR/bin/antiddos"
     chmod +x "$SRC_DIR"/*.sh 2>/dev/null || true
@@ -129,11 +116,10 @@ sync_sources() {
 }
 
 remote_has_changes() {
-    git -C "$SRC_DIR" fetch --quiet origin "$REPO_BRANCH"
+    git -C "$SRC_DIR" fetch --quiet --depth 1 origin "+refs/heads/$REPO_BRANCH:refs/remotes/origin/$REPO_BRANCH"
     [[ "$(git -C "$SRC_DIR" rev-parse HEAD)" != "$(git -C "$SRC_DIR" rev-parse "origin/$REPO_BRANCH")" ]]
 }
 
-# ── Estado ────────────────────────────────────────────────────────────────────
 is_installed() {
     [[ -f "$STATE_FILE" ]] && return 0
     local panel; panel="$(detect_panel)"
@@ -152,12 +138,15 @@ install_cli() {
 }
 
 run_installer() {
-    [[ -f "$SRC_DIR/$INSTALLER_REL" ]] || sync_sources
-    PANEL_DIR="$PANEL" WEB_USER="$WEB_USER" ANTIDDOS_REPO="$REPO_URL" SRC_DIR="$SRC_DIR" \
-        bash "$SRC_DIR/$INSTALLER_REL" "$@"
+    local dir="$SRC_DIR"
+    if [[ ! -f "$dir/$INSTALLER_REL" && "${1:-}" == "uninstall" && -f "$STATE_DIR/source/$INSTALLER_REL" ]]; then
+        dir="$STATE_DIR/source"
+    fi
+    [[ -f "$dir/$INSTALLER_REL" ]] || { sync_sources; dir="$SRC_DIR"; }
+    PANEL_DIR="$PANEL" WEB_USER="$WEB_USER" ANTIDDOS_REPO="$REPO_URL" SRC_DIR="$dir" \
+        bash "$dir/$INSTALLER_REL" "$@"
 }
 
-# ── Instalación del panel ─────────────────────────────────────────────────────
 installed_version() {
     local version=""
 
@@ -176,7 +165,32 @@ installed_version() {
     echo "${version:-desconocida}"
 }
 
+check_disk() {
+    local dir="${PANEL_DIR:-${PANEL:-/var/www/pterodactyl}}" free need=800
+    [ -d "$dir" ] || dir=/
+    free="$(df -Pm "$dir" 2>/dev/null | awk 'NR==2 {print $4}')"
+    case "$free" in ''|*[!0-9]*) return 0 ;; esac
+    if [ "$free" -lt "$need" ]; then
+        fail "El disco esta casi lleno (${free} MB libres, hacen falta ${need} MB). Libera espacio y vuelve a intentarlo. Para ver que ocupa: du -xh / --max-depth=2 2>/dev/null | sort -rh | head -20"
+    fi
+}
+
+slim_sources() {
+    local d
+    for d in "$STATE_DIR/source" "$SRC_DIR"; do
+        [ -n "$d" ] && [ -d "$d" ] || continue
+        { [ -f "$d/extension.json" ] || [ -f "$d/VERSION" ]; } || continue
+        { [ -f "$d/$INSTALLER_REL" ] || [ -f "$d/tools/register-provider.php" ] || [ -f "$d/scripts/patcher.php" ]; } || continue
+        find "$d" -mindepth 1 -maxdepth 1 ! -name scripts ! -name tools ! -name patches ! -name bin ! -name '*.sh' \
+            ! -name extension.json ! -name VERSION ! -name .gitattributes ! -name .vexa-slim -exec rm -rf {} + 2>/dev/null || true
+        date '+%F %T' > "$d/.vexa-slim" 2>/dev/null || true
+        chmod -R o-rwx "$d" 2>/dev/null || true
+    done
+    return 0
+}
+
 do_install() {
+    check_disk
     require_panel
 
     if is_installed; then
@@ -189,6 +203,7 @@ do_install() {
     info "Instalando la extensión en el panel…"
     run_installer install
     install_cli
+    slim_sources
 }
 
 install_menu() {
@@ -199,7 +214,7 @@ install_menu() {
     echo
     echo "  1) Reinstalar  — vuelve a copiar todos los archivos y parches del panel."
     echo "                   NO se toca la base de datos: ajustes, bloqueos, lista"
-    echo "                   blanca, optimizaciones y la clave de la API se conservan."
+    echo "                   blanca y la clave de la API se conservan."
     echo "  2) Actualizar  — descarga la última versión del repositorio y la instala."
     echo "  3) Cancelar    — no hacer nada."
     echo
@@ -237,15 +252,20 @@ do_reinstall() {
     sync_sources
     run_installer install
     install_cli
+    if node_installed; then
+        info "Actualizando también el agente de este nodo…"
+        bash "$(kit_dir)/$NODE_REL" install --yes
+    fi
     ok "Extensión reinstalada. No se ha borrado ningún dato."
+    slim_sources
 }
 
 do_update() {
-    # En una máquina que solo es nodo no hay panel: se actualiza el agente.
+    check_disk
     if [[ -z "$(detect_panel)" ]] && node_installed; then
-        sync_sources
+        fetch_from_panel || sync_sources
         info "Actualizando el agente de nodo…"
-        bash "$SRC_DIR/$NODE_REL" install --yes
+        bash "$(kit_dir)/$NODE_REL" install --yes
         install_cli
         ok "Agente de nodo actualizado (configuración conservada)."
         return
@@ -268,17 +288,14 @@ do_update() {
     sync_sources
     run_installer install
     install_cli
-    # Si esta misma máquina también es nodo, se actualiza el agente.
     if node_installed; then
-        bash "$SRC_DIR/$NODE_REL" install --yes
+        bash "$(kit_dir)/$NODE_REL" install --yes
     fi
     ok "Extensión actualizada a la última versión."
+    slim_sources
 }
 
-# ── Desinstalación ────────────────────────────────────────────────────────────
 do_uninstall() {
-    # Este script puede vivir dentro de SRC_DIR y vamos a borrar esa carpeta:
-    # nos movemos a una copia temporal para que bash pueda seguir leyéndose.
     if [[ "${ANTIDDOS_DETACHED:-0}" != "1" ]]; then
         local tmp; tmp="$(mktemp /tmp/antiddos-XXXXXX.sh)"
         cat "${BASH_SOURCE[0]}" > "$tmp"
@@ -299,7 +316,6 @@ do_uninstall() {
     else
         info "Las tablas de la base de datos se conservan (añade --drop-data para borrarlas)."
     fi
-    warn "Las optimizaciones ya aplicadas a servidores (server.properties, flags de arranque) NO se revierten solas: usa 'optimize-server revert' antes."
     if [[ "$FORCE" != "1" && -t 0 ]]; then
         read -r -p "¿Continuar? [s/N] " answer
         [[ "$answer" =~ ^([sS]|[yY]|si|SI|sí|SÍ)$ ]] || { info "Cancelado."; return; }
@@ -314,10 +330,10 @@ do_uninstall() {
     fi
 
     if node_installed; then
-        [[ -f "$SRC_DIR/$NODE_REL" ]] && bash "$SRC_DIR/$NODE_REL" uninstall || warn "No se pudo quitar el agente de nodo con el script; revisa 'systemctl list-units antiddos*'."
+        [[ -f "$(kit_dir)/$NODE_REL" ]] && bash "$(kit_dir)/$NODE_REL" uninstall || warn "No se pudo quitar el agente de nodo con el script; revisa 'systemctl list-units antiddos*'."
     fi
 
-    [[ -f "$SRC_DIR/scripts/nginx-shield.sh" ]] && bash "$SRC_DIR/scripts/nginx-shield.sh" off >/dev/null 2>&1 || true
+    [[ -f "$(kit_dir)/scripts/nginx-shield.sh" ]] && bash "$(kit_dir)/scripts/nginx-shield.sh" off >/dev/null 2>&1 || true
 
     autoupdate_off quiet
     rm -rf "$SRC_DIR"
@@ -325,10 +341,6 @@ do_uninstall() {
     ok "Anti-DDoS y Optimización desinstalado por completo. No queda nada."
 }
 
-# ── Todo en uno: panel + nodo en la misma máquina ─────────────────────────────
-# Instala/actualiza la extensión del panel y el firewall del nodo de una vez.
-# La clave de la API se genera sola y se entrega al agente (además, al estar el
-# panel en esta máquina, el agente lee los bloqueos en local, sin red ni clave).
 do_install_all() {
     require_panel
     sync_sources
@@ -347,28 +359,64 @@ do_install_all() {
     local args=(install --panel-dir="$PANEL" --key="$key")
     [[ "$url" =~ ^https?://[A-Za-z0-9._:/-]+$ ]] && args+=(--panel-url="$url")
     [[ "$FORCE" == "1" ]] && args+=(--yes)
-    bash "$SRC_DIR/$NODE_REL" "${args[@]}" "${PASSTHRU[@]}"
+    bash "$(kit_dir)/$NODE_REL" "${args[@]}" "${PASSTHRU[@]}"
 
     ok "Todo instalado: panel + nodo. Los bloqueos del panel llegan al firewall en menos de 30 s."
     info "Panel: ${url:-tu-panel}/admin/extensions/antiddos   ·   Estado: sudo antiddos status"
 }
 
-# ── Agente de nodo (firewall anti-DDoS) ───────────────────────────────────────
+fetch_from_panel() {
+    local url="${NODE_PANEL_URL%/}" key="$API_KEY" conf="/etc/antiddos/agent.conf"
+    if [[ ( -z "$url" || -z "$key" ) && -f "$conf" ]]; then
+        [[ -z "$url" ]] && url="$(grep -m1 -E '^PANEL_URL=' "$conf" 2>/dev/null | sed -E 's/^PANEL_URL="?([^"]*)"?$/\1/')"
+        [[ -z "$key" ]] && key="$(grep -m1 -E '^API_KEY=' "$conf" 2>/dev/null | sed -E 's/^API_KEY="?([^"]*)"?$/\1/')"
+    fi
+    url="${url%/}"
+    [[ -n "$url" && -n "$key" ]] || return 1
+    [[ "$url" =~ ^https?://[A-Za-z0-9._:-]+(/[A-Za-z0-9._~%!\$\&\(\)*+,;=:@/-]*)?$ ]] || return 1
+    require_cmd curl
+
+    local tmp http
+    tmp="$(mktemp -d /tmp/antiddos-bundle.XXXXXX)"
+    info "Descargando el agente desde ${url} (sin pasar por GitHub)…"
+    http="$(curl -sS --max-time 60 -o "$tmp/bundle.tar.gz" -w '%{http_code}' \
+        -H "X-Antiddos-Key: $key" "$url/api/antiddos/agent-bundle" 2>/dev/null)" || http=0
+
+    if [[ "$http" != "200" ]]; then
+        warn "El panel no entregó el agente (HTTP $http): se prueba descargando de GitHub."
+        rm -rf "$tmp"
+        return 1
+    fi
+
+    rm -rf "$SRC_DIR"
+    mkdir -p "$SRC_DIR"
+    if ! tar -xzf "$tmp/bundle.tar.gz" -C "$SRC_DIR" 2>/dev/null || [[ ! -f "$SRC_DIR/$NODE_REL" ]]; then
+        warn "El paquete descargado del panel no es válido: se prueba descargando de GitHub."
+        rm -rf "$tmp" "$SRC_DIR"
+        return 1
+    fi
+
+    find "$SRC_DIR" -name '*.sh' -print0 | xargs -0 -r sed -i 's/\r$//'
+    chmod +x "$SRC_DIR"/*.sh "$SRC_DIR/scripts"/*.sh 2>/dev/null || true
+    rm -rf "$tmp"
+    ok "Agente descargado del panel."
+}
+
 do_node_install() {
-    sync_sources
-    [[ -f "$SRC_DIR/$NODE_REL" ]] || fail "Falta $NODE_REL en el repositorio."
-    bash "$SRC_DIR/$NODE_REL" install "${PASSTHRU[@]}" $([[ "$FORCE" == "1" ]] && echo --yes)
+    fetch_from_panel || sync_sources
+    [[ -f "$(kit_dir)/$NODE_REL" ]] || fail "Falta $NODE_REL en el repositorio."
+    bash "$(kit_dir)/$NODE_REL" install "${PASSTHRU[@]}" $([[ "$FORCE" == "1" ]] && echo --yes)
     install_cli
 }
 
 do_node_uninstall() {
-    [[ -f "$SRC_DIR/$NODE_REL" ]] || fail "No se encuentra el agente en $SRC_DIR. ¿Está instalado?"
-    bash "$SRC_DIR/$NODE_REL" uninstall
+    [[ -f "$(kit_dir)/$NODE_REL" ]] || fail "No se encuentra el agente en $SRC_DIR. ¿Está instalado?"
+    bash "$(kit_dir)/$NODE_REL" uninstall
 }
 
 do_node_status() {
-    if [[ -f "$SRC_DIR/$NODE_REL" ]]; then
-        bash "$SRC_DIR/$NODE_REL" status
+    if [[ -f "$(kit_dir)/$NODE_REL" ]]; then
+        bash "$(kit_dir)/$NODE_REL" status
     elif node_installed; then
         "$FW_BIN" status
     else
@@ -380,7 +428,6 @@ need_fw() { node_installed || fail "El firewall no está instalado en esta máqu
 
 do_fw() { need_fw; exec "$FW_BIN" "$@"; }
 
-# ── Bloqueos manuales: firewall local (si hay) + panel (si hay) ───────────────
 do_ban() {
     local ip="${1:-}" minutes="${2:-}"
     [[ -n "$ip" ]] || fail "Uso: antiddos ban <IP> [minutos]   (0 = permanente)"
@@ -435,26 +482,29 @@ do_whitelist() {
     esac
 }
 
-# ── Optimización ──────────────────────────────────────────────────────────────
-do_optimize_host() {
-    local sub="${1:-status}"
-    local tune="$TUNE_BIN"
-    [[ -x "$tune" ]] || tune="$SRC_DIR/scripts/optimize-host.sh"
-    if [[ ! -f "$tune" ]]; then sync_sources; tune="$SRC_DIR/scripts/optimize-host.sh"; fi
-    bash "$tune" "$sub"
+do_net() {
+    local kind="$1"; shift
+    { [[ -n "$(detect_panel)" ]] && is_installed; } || fail "Los operadores y países se bloquean desde el panel: ejecuta este comando en la máquina del panel (o usa la pestaña Bloqueos)."
+    require_panel
+    local extra=() a
+    for a in "${PASSTHRU[@]}"; do
+        [[ "$a" == --hours=* || "$a" == --reason=* ]] && extra+=("$a")
+    done
+    [[ "$FORCE" == "1" ]] && extra+=(--force)
+    run_installer artisan "$kind" "$@" "${extra[@]}" || exit 1
 }
 
-do_optimize_server() {
+do_ip() {
+    [[ -n "${1:-}" ]] || fail "Uso: antiddos ip <IP>"
     require_panel
-    run_installer artisan optimize "${PASSTHRU[@]}"
+    run_installer artisan ip "$1" || exit 1
 }
 
 do_nginx() {
-    [[ -f "$SRC_DIR/scripts/nginx-shield.sh" ]] || sync_sources
-    bash "$SRC_DIR/scripts/nginx-shield.sh" "$1" "${PASSTHRU[@]}"
+    [[ -f "$(kit_dir)/scripts/nginx-shield.sh" ]] || sync_sources
+    bash "$(kit_dir)/scripts/nginx-shield.sh" "$1" "${PASSTHRU[@]}"
 }
 
-# ── Auto-update ───────────────────────────────────────────────────────────────
 autoupdate_on() {
     [[ -f "$SRC_DIR/antiddos.sh" ]] || sync_sources
     local line="0 4 * * * /usr/bin/env bash $SRC_DIR/antiddos.sh update >> $LOG_FILE 2>&1 # $CRON_MARKER"
@@ -472,7 +522,6 @@ autoupdate_off() {
     fi
 }
 
-# ── Estado / utilidades del panel ─────────────────────────────────────────────
 do_status() {
     PANEL="$(detect_panel)"
     if [[ -f "$SRC_DIR/$INSTALLER_REL" && -n "$PANEL" ]]; then
@@ -509,7 +558,6 @@ do_version() {
     fi
 }
 
-# ── Ayuda ─────────────────────────────────────────────────────────────────────
 usage() {
     cat <<EOF
 Anti-DDoS y Optimización — anti-DDoS y optimización para Pterodactyl
@@ -517,7 +565,7 @@ Anti-DDoS y Optimización — anti-DDoS y optimización para Pterodactyl
 TODO EN UNO (panel y Wings en la misma máquina)
   install-all [--tcp=25565 --udp=19132]   Instala panel + firewall del nodo; la clave se gestiona sola
 
-PANEL (extensión + escudo web + optimizador de servidores)
+PANEL (extensión + escudo web)
   install               Instala la extensión en el panel
                         (si ya está instalada, ofrece reinstalar o actualizar)
   reinstall             Reinstala todos los archivos SIN tocar la base de datos
@@ -528,7 +576,6 @@ PANEL (extensión + escudo web + optimizador de servidores)
   apikey [--key=X]      Genera (o fija) la clave de la API que usan los nodos
   info                  Configuración y estadísticas actuales
   prune                 Limpia bloqueos caducados y eventos antiguos
-  optimize-server ...   Optimiza servidores de Minecraft (ver abajo)
   nginx-on [--rate=20 --burst=100 --conn=50]   Límites de peticiones en nginx (capa 7)
   nginx-off | nginx-status
 
@@ -538,21 +585,21 @@ NODO (firewall anti-DDoS contra ataques a los servidores de Minecraft)
   node-uninstall        Quita el agente (conserva /etc/antiddos)
   node-status           Estado del firewall
   fw <acción>           apply | remove | status | top | sync | set CLAVE VALOR  (ver 'antiddos fw help')
-  attack-on             Modo "bajo ataque": límites mucho más estrictos
+  attack-on             Modo "bajo ataque": límites más estrictos solo para IPs desconocidas (los jugadores conectados no se ven afectados)
   attack-off            Vuelve a los límites normales
-  optimize-host [status|apply|revert]   Ajustes del sistema (swap, THP, BBR, ficheros…)
 
 BLOQUEOS (firewall local y/o panel, según lo que haya en esta máquina)
   ban <IP> [minutos]    Bloquea una IP (0 = permanente)
   unban <IP>            Desbloquea
   bans                  Lista los bloqueos activos
   whitelist add|del|list [IP|CIDR]
+  ip <IP>               Origen, operador, reputación y si se puede bloquear
 
-OPTIMIZAR SERVIDORES
-  optimize-server list                          Perfiles y servidores optimizables
-  optimize-server apply --profile=PERFIL [--server=ID|--all] [--no-flags] [--no-files] [--restart]
-  optimize-server revert [--server=ID|--all]
-  Perfiles: light | balanced | crowded    (crowded = muchos jugadores)
+OPERADORES Y PAÍSES (bloquea todas sus IPs, también las nuevas; en el panel y en todos los nodos)
+  asn block AS199585 [--hours=24] [--reason="motivo"]   Bloquea un operador entero (vacío = permanente)
+  asn unblock AS199585 | asn list | asn refresh
+  country block PL [--hours=24]                          Bloquea un país entero (redes > 4 M de IPs: --force)
+  country unblock PL | country list
 
 OTROS
   autoupdate-on         Programa la actualización automática diaria (04:00)
@@ -572,20 +619,19 @@ Ejemplos:
   bash <(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/Anti-DDOS-y-Optimizacion/main/install.sh) install-all
   sudo antiddos node-install --tcp=25565:25600 --udp=19132 --panel-url=https://panel.midominio.com --key=XXXX
   sudo antiddos attack-on
-  sudo antiddos optimize-server apply --profile=crowded --all --restart
 EOF
 }
 
 ACTION="${1:-help}"
 shift || true
 
-# Argumentos posicionales (ban/unban/whitelist/fw/optimize-*) y opciones.
 POS=()
 for arg in "$@"; do
     case "$arg" in
         --force|-y|--yes) FORCE=1 ;;
         --drop-data)      DROP_DATA=1 ;;
         --key=*)          API_KEY="${arg#*=}"; PASSTHRU+=("$arg") ;;
+        --panel-url=*)    NODE_PANEL_URL="${arg#*=}"; PASSTHRU+=("$arg") ;;
         --panel=*)        PANEL_DIR="${arg#*=}" ;;
         --user=*)         WEB_USER="${arg#*=}" ;;
         --*)              PASSTHRU+=("$arg") ;;
@@ -593,7 +639,6 @@ for arg in "$@"; do
     esac
 done
 
-# Opciones que 'ban' admite como --minutes=N
 case "$ACTION" in
     ban)
         MIN=""
@@ -623,8 +668,9 @@ case "$ACTION" in
     unban)                  do_unban "${POS[0]:-}" ;;
     bans)                   do_bans ;;
     whitelist|white)        do_whitelist "${POS[0]:-list}" "${POS[1]:-}" ;;
-    optimize-host)          do_optimize_host "${POS[0]:-status}" ;;
-    optimize-server)        do_optimize_server ;;
+    asn|operador)           do_net asn "${POS[@]}" ;;
+    country|pais|país)      do_net country "${POS[@]}" ;;
+    ip)                     do_ip "${POS[0]:-}" ;;
     nginx-on)               do_nginx on ;;
     nginx-off)              do_nginx off ;;
     nginx-status)           do_nginx status ;;

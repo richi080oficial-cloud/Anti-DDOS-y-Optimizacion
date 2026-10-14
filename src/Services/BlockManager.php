@@ -7,27 +7,19 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldBlock;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldEvent;
+use Pterodactyl\Extensions\AntiDDoS\Models\ShieldMetric;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldSetting;
 
-/**
- * Gestiona las IPs bloqueadas.
- *
- * La base de datos es la fuente de verdad (la ve el admin y la descargan los
- * nodos), pero en cada peticion solo se consulta un mapa pequeno en cache, asi
- * que el escudo no anade ninguna consulta SQL al camino normal.
- */
 class BlockManager
 {
     public const CACHE_KEY = 'antiddos:blocklist';
 
-    /** Segundos que vive el mapa en cache (tambien es la demora maxima de un desbloqueo en otro worker). */
+    protected const IP_KEY = 'antiddos:blk:ip:';
+    protected const READY_KEY = 'antiddos:blk:ready';
+    protected const WHY_KEY = 'antiddos:blk:why:';
+
     protected const MAP_TTL = 30;
 
-    /**
-     * Mapa ip => caducidad (timestamp; 0 = permanente) de los bloqueos activos.
-     *
-     * @return array<string, int>
-     */
     public function map(): array
     {
         return Cache::remember(self::CACHE_KEY, self::MAP_TTL, function () {
@@ -56,23 +48,63 @@ class BlockManager
         return $map[$ip] === 0 || $map[$ip] > time();
     }
 
-    /** Segundos que le quedan al bloqueo (0 = permanente, null = no esta bloqueada). */
     public function remaining(string $ip): ?int
     {
-        $map = $this->map();
+        $key = self::IP_KEY . $ip;
+        $values = Cache::many([self::READY_KEY, $key]);
 
-        if (!array_key_exists($ip, $map)) {
+        if (empty($values[self::READY_KEY])) {
+            $this->index();
+            $exp = Cache::get($key);
+        } else {
+            $exp = $values[$key] ?? null;
+        }
+
+        if ($exp === null || $exp === false) {
             return null;
         }
 
-        return $map[$ip] === 0 ? 0 : max(0, $map[$ip] - time());
+        $exp = (int) $exp;
+
+        if ($exp !== 0 && $exp <= time()) {
+            return null;
+        }
+
+        return $exp === 0 ? 0 : $exp - time();
     }
 
-    /**
-     * Bloquea una IP. $minutes = null -> permanente.
-     */
-    public function block(string $ip, ?int $minutes, ?string $reason = null, string $source = 'manual', ?int $userId = null): ShieldBlock
+    /** @return array{0: string, 1: string}|null [origen, motivo] del bloqueo activo */
+    public function why(string $ip): ?array
     {
+        $why = Cache::get(self::WHY_KEY . $ip);
+
+        return is_array($why) && count($why) === 2 ? [(string) $why[0], (string) $why[1]] : null;
+    }
+
+    protected function index(): void
+    {
+        foreach ($this->map() as $ip => $exp) {
+            $this->remember((string) $ip, (int) $exp);
+        }
+
+        Cache::put(self::READY_KEY, 1, 86400);
+    }
+
+    protected function remember(string $ip, int $exp): void
+    {
+        if ($exp === 0) {
+            Cache::forever(self::IP_KEY . $ip, 0);
+        } elseif ($exp > time()) {
+            Cache::put(self::IP_KEY . $ip, $exp, $exp - time() + 5);
+        }
+    }
+
+    public function block(string $ip, ?int $minutes, ?string $reason = null, string $source = 'manual', ?int $userId = null, ?string $requestIp = null): ShieldBlock
+    {
+        if (($why = app(SafeIps::class)->protectedReason($ip, $requestIp)) !== null) {
+            throw new \DomainException($why);
+        }
+
         $existing = ShieldBlock::query()->where('ip', $ip)->first();
 
         $block = $existing ?? new ShieldBlock(['ip' => $ip]);
@@ -84,9 +116,16 @@ class BlockManager
         $block->save();
 
         $this->flush();
+        $this->remember($ip, $block->expires_at ? $block->expires_at->getTimestamp() : 0);
+
+        if ($block->expires_at) {
+            Cache::put(self::WHY_KEY . $ip, [$source, (string) $reason], $block->expires_at->getTimestamp() - time() + 60);
+        } else {
+            Cache::forever(self::WHY_KEY . $ip, [$source, (string) $reason]);
+        }
 
         ShieldEvent::record(
-            $source === 'auto' ? 'auto-ban' : 'ban',
+            in_array($source, ['auto', 'intel'], true) ? 'auto-ban' : 'ban',
             sprintf('IP %s bloqueada %s%s', $ip, $minutes === null ? 'permanentemente' : "{$minutes} min", $reason ? " ({$reason})" : ''),
             $ip
         );
@@ -94,10 +133,6 @@ class BlockManager
         return $block;
     }
 
-    /**
-     * Bloqueo automatico del escudo: la duracion se duplica con cada reincidencia
-     * (dentro de la ventana en la que se recuerda a la IP) hasta un maximo.
-     */
     public function blockAuto(string $ip, string $reason): ShieldBlock
     {
         $settings = ShieldSetting::snapshot();
@@ -115,6 +150,8 @@ class BlockManager
         $deleted = ShieldBlock::query()->where('ip', $ip)->delete() > 0;
 
         $this->flush();
+        Cache::forget(self::IP_KEY . $ip);
+        Cache::forget(self::WHY_KEY . $ip);
 
         if ($deleted) {
             ShieldEvent::record('unban', "IP {$ip} desbloqueada", $ip);
@@ -123,7 +160,6 @@ class BlockManager
         return $deleted;
     }
 
-    /** @return Collection<int, ShieldBlock> */
     public function active(): Collection
     {
         return ShieldBlock::query()
@@ -134,10 +170,6 @@ class BlockManager
             ->get();
     }
 
-    /**
-     * Borra bloqueos caducados hace mas de un dia (se conservan ese tiempo para
-     * recordar reincidencias) y eventos antiguos. Devuelve cuantos bloqueos se quitaron.
-     */
     public function prune(): int
     {
         $removed = ShieldBlock::query()
@@ -147,6 +179,13 @@ class BlockManager
 
         $days = max(1, (int) ShieldSetting::read('retention_days', 14));
         ShieldEvent::query()->where('created_at', '<', Carbon::now()->subDays($days))->delete();
+
+        try {
+            ShieldMetric::query()->where('recorded_at', '<', Carbon::now()->subDays(min($days, MetricsService::KEEP_DAYS)))->delete();
+        } catch (\Throwable $e) {
+        }
+
+        app(NetworkBlocks::class)->prune();
 
         $this->flush();
 
@@ -158,11 +197,9 @@ class BlockManager
         Cache::forget(self::CACHE_KEY);
     }
 
-    /**
-     * Texto que descargan los nodos: "B <ip>" por cada bloqueo activo y
-     * "W <ip/cidr>" por cada entrada de la lista blanca.
-     */
-    public function feed(): string
+    public const UPDATE_REQ_KEY = 'antiddos:update-req:';
+
+    public function feed(?string $host = null): string
     {
         $lines = [];
 
@@ -170,10 +207,63 @@ class BlockManager
             $lines[] = 'B ' . $block->ip;
         }
 
-        foreach (IpMatcher::parseList((string) ShieldSetting::read('whitelist', '')) as $rule) {
+        try {
+            foreach (app(NetworkBlocks::class)->feedPrefixes() as $cidr) {
+                $lines[] = 'A ' . $cidr;
+            }
+        } catch (\Throwable $e) {
+        }
+
+        $whitelist = IpMatcher::parseList((string) ShieldSetting::read('whitelist', ''));
+
+        foreach (array_unique(array_merge($whitelist, app(SafeIps::class)->infrastructure())) as $rule) {
             $lines[] = 'W ' . $rule;
         }
 
+        $settings = ShieldSetting::snapshot();
+        $map = [
+            'fw_tcp_ports' => 'TCP_PORTS', 'fw_udp_ports' => 'UDP_PORTS', 'fw_conn_limit' => 'CONN_LIMIT',
+            'fw_syn_rate' => 'SYN_RATE', 'fw_udp_rate' => 'UDP_RATE', 'fw_ban_seconds' => 'BAN_SECONDS',
+            'fw_attack_mode' => 'ATTACK_MODE', 'fw_ban_mode' => 'BAN_MODE',
+        ];
+
+        $override = [];
+
+        if ((string) ($settings['fw_tcp_ports'] ?? '') !== '' && !empty($settings['fw_auto'])) {
+            $plan = app(MinecraftPorts::class)->plan();
+
+            if ($plan['tcp'] !== '') {
+                $override['fw_tcp_ports'] = $plan['tcp'];
+            }
+
+            if ($plan['udp'] !== '') {
+                $override['fw_udp_ports'] = $plan['udp'];
+            }
+        }
+
+        foreach ($map as $key => $agentKey) {
+            $value = trim((string) ($override[$key] ?? $settings[$key] ?? ''));
+
+            if ($agentKey === 'TCP_PORTS' && $value === '-') {
+                continue;
+            }
+
+            if ($value !== '' && preg_match('/^([0-9:,-]+|monitor|balanced|strict)$/', $value)) {
+                $lines[] = "C {$agentKey} {$value}";
+            }
+        }
+
+        $host = trim((string) $host);
+
+        if ($host !== '' && Cache::pull(self::UPDATE_REQ_KEY . md5(strtolower($host)))) {
+            $lines[] = 'U 1';
+        }
+
         return implode("\n", $lines) . ($lines ? "\n" : '');
+    }
+
+    public function requestNodeUpdate(string $host): void
+    {
+        Cache::put(self::UPDATE_REQ_KEY . md5(strtolower(trim($host))), true, now()->addHours(2));
     }
 }

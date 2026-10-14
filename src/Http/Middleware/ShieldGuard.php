@@ -5,35 +5,25 @@ namespace Pterodactyl\Extensions\AntiDDoS\Http\Middleware;
 use Closure;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldSetting;
 use Pterodactyl\Extensions\AntiDDoS\Services\BlockManager;
 use Pterodactyl\Extensions\AntiDDoS\Services\IpMatcher;
+use Pterodactyl\Extensions\AntiDDoS\Services\NetworkBlocks;
+use Pterodactyl\Extensions\AntiDDoS\Services\PanelIdentity;
 use Pterodactyl\Extensions\AntiDDoS\Services\RateCounter;
+use Pterodactyl\Extensions\AntiDDoS\Services\SafeIps;
+use Pterodactyl\Extensions\AntiDDoS\Support\BlockPage;
 use Symfony\Component\HttpFoundation\Response;
 
-/**
- * Escudo de capa 7 del panel: limita las peticiones por IP y bloquea a quien
- * se pasa. Se registra como middleware GLOBAL (despues de TrustProxies, para
- * ver la IP real detras de Cloudflare/nginx) y antes de sesion, base de datos
- * y PHP "caro": un bloqueado recibe un 429 casi gratis.
- *
- * Orden de decisiones (de mas barato a mas caro, siempre sin SQL):
- *   1. api/remote/* (Wings) y api/antiddos/* (nodos): pasan siempre.
- *   2. IP interna (privada/loopback) o en la lista blanca: pasa siempre.
- *   3. IP bloqueada: 429.
- *   4. Assets estaticos: pasan sin contarse.
- *   5. Se cuenta la peticion; si supera el limite, se bloquea (con
- *      duracion creciente por reincidencia) y se responde 429.
- *
- * Si la IP que ve el panel es siempre la de un proxy interno (TRUSTED_PROXIES
- * sin configurar), todas las peticiones parecen internas y el escudo no hace
- * nada: falla "abierto" a proposito, para no bloquear a todos los usuarios.
- */
 class ShieldGuard
 {
+    protected const TRUSTED_KEY = 'antiddos:okip:';
+
     public function __construct(
         protected BlockManager $blocks,
         protected RateCounter $counter,
+        protected NetworkBlocks $nets,
     ) {
     }
 
@@ -42,7 +32,6 @@ class ShieldGuard
         try {
             $deny = $this->inspect($request);
         } catch (\Throwable $e) {
-            // Un fallo del escudo (cache caida, BD sin migrar...) nunca debe tumbar el panel.
             return $next($request);
         }
 
@@ -63,14 +52,20 @@ class ShieldGuard
             return null;
         }
 
-        if (IpMatcher::isInternal($ip) || IpMatcher::inList($ip, IpMatcher::parseList((string) $settings['whitelist']))) {
+        if (IpMatcher::isInternal($ip) || IpMatcher::isCloudflare($ip) || app(SafeIps::class)->isInfrastructure($ip) || IpMatcher::inList($ip, IpMatcher::parseList((string) $settings['whitelist']))) {
             return null;
         }
 
         $remaining = $this->blocks->remaining($ip);
 
         if ($remaining !== null) {
-            return $this->deny($request, $remaining);
+            [$source, $why] = $this->blocks->why($ip) ?? ['auto', ''];
+
+            return $this->deny($request, $remaining, 429, BlockPage::kindFor($source, $why), $ip);
+        }
+
+        if ($this->nets->match($ip) !== null) {
+            return $this->deny($request, 0, 403, 'network', $ip);
         }
 
         if ($request->is(...(array) config('antiddos.exempt_paths', []))) {
@@ -83,8 +78,49 @@ class ShieldGuard
             }
         }
 
-        if ($this->counter->hit('all', $ip) > max(10, (int) $settings['general_limit'])) {
+        $who = app(PanelIdentity::class)->resolve($request, $ip);
+
+        if ($who !== null) {
+            Cache::add(self::TRUSTED_KEY . $ip, 1, 1800);
+
+            return $this->userLimit($request, $ip, $who, max(120, (int) $settings['user_limit']));
+        }
+
+        $base = max(10, (int) $settings['general_limit']);
+        $trusted = Cache::has(self::TRUSTED_KEY . $ip);
+        $limit = $trusted ? $base * 3 : $base;
+        $count = $this->counter->hit('all', $ip);
+
+        if ($count <= $limit) {
+            return null;
+        }
+
+        if ($count > $limit * 2) {
             return $this->ban($request, $ip, 'Exceso de peticiones por minuto');
+        }
+
+        return $this->soften($request, $ip, $trusted ? 6 : 3);
+    }
+
+    protected function soften(Request $request, string $ip, int $strikes): ?Response
+    {
+        $window = intdiv(time(), 60);
+
+        if (Cache::add('antiddos:soft:' . $ip . ':' . $window, 1, 90) && $this->counter->hit('warn', $ip, 600) >= $strikes) {
+            return $this->ban($request, $ip, 'Exceso de peticiones por minuto (reincidente)');
+        }
+
+        return $this->deny($request, 60 - (time() % 60), 429, 'slow', $ip);
+    }
+
+    protected function userLimit(Request $request, string $ip, string $who, int $limit): ?Response
+    {
+        if ($this->counter->hit('usr', $who) > $limit) {
+            return $this->deny($request, 60 - (time() % 60), 429, 'slow', $ip);
+        }
+
+        if ($this->counter->hit('usrip', $ip) > $limit * 5) {
+            return $this->ban($request, $ip, 'Exceso de peticiones por minuto (varias sesiones)');
         }
 
         return null;
@@ -95,10 +131,10 @@ class ShieldGuard
         $block = $this->blocks->blockAuto($ip, $reason);
         $seconds = $block->expires_at ? max(1, $block->expires_at->getTimestamp() - time()) : 0;
 
-        return $this->deny($request, $seconds);
+        return $this->deny($request, $seconds, 429, BlockPage::kindFor('auto', $reason), $ip);
     }
 
-    protected function deny(Request $request, int $retryAfter): Response
+    protected function deny(Request $request, int $retryAfter, int $status = 429, string $kind = 'generic', string $ip = ''): Response
     {
         $headers = ['Cache-Control' => 'no-store'];
 
@@ -106,20 +142,15 @@ class ShieldGuard
             $headers['Retry-After'] = (string) $retryAfter;
         }
 
+        $code = $status === 403 ? 'AccessDeniedHttpException' : 'TooManyRequestsHttpException';
+        $detail = BlockPage::detail($kind);
+
         if ($request->expectsJson() || $request->is('api/*')) {
             return new JsonResponse([
-                'errors' => [[
-                    'code' => 'TooManyRequestsHttpException',
-                    'status' => '429',
-                    'detail' => 'Demasiadas peticiones. Tu IP está bloqueada temporalmente.',
-                ]],
-            ], 429, $headers);
+                'errors' => [['code' => $code, 'status' => (string) $status, 'detail' => $detail]],
+            ], $status, $headers);
         }
 
-        return new Response(
-            'Demasiadas peticiones. Tu IP esta bloqueada temporalmente. / Too many requests.',
-            429,
-            $headers + ['Content-Type' => 'text/plain; charset=utf-8']
-        );
+        return new Response(BlockPage::render($kind, $retryAfter, $ip), $status, $headers + ['Content-Type' => 'text/html; charset=utf-8']);
     }
 }

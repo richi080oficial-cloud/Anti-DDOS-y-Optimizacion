@@ -1,22 +1,8 @@
 #!/usr/bin/env bash
-#
-# Anti-DDoS y Optimización — agente de nodo (firewall anti-DDoS + ajustes del sistema)
-#
-# Se instala en CADA máquina que reciba tráfico de jugadores (nodos Wings) y,
-# si quieres, también en la del panel. No necesita el panel instalado ahí.
-#
-#   bash scripts/node-agent.sh install [--tcp=25565,25566] [--udp=19132] [--web=80,443]
-#                                      [--ssh=22] [--panel-url=https://panel.x.com] [--key=CLAVE]
-#   bash scripts/node-agent.sh uninstall
-#   bash scripts/node-agent.sh status
-#
-# Normalmente lo invoca el gestor: sudo antiddos node-install
-#
 set -Eeuo pipefail
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SBIN_FW="/usr/local/sbin/antiddos-fw"
-SBIN_TUNE="/usr/local/sbin/antiddos-tune"
 CONF_DIR="/etc/antiddos"
 CONF="${CONF_DIR}/agent.conf"
 UNIT_DIR="/etc/systemd/system"
@@ -75,7 +61,6 @@ detect_conflicts() {
 }
 
 ask() {
-    # ask "pregunta" "valor_por_defecto" -> imprime la respuesta
     local q="$1" def="$2" ans=""
     if [[ "$NO_PROMPT" == "1" || ! -t 0 ]]; then echo "$def"; return; fi
     read -r -p "$q [${def:-vacío}]: " ans || true
@@ -136,6 +121,22 @@ Type=oneshot
 ExecStart=${SBIN_FW} sync
 EOF
 
+    cat > "${UNIT_DIR}/antiddos-live.service" <<EOF
+[Unit]
+Description=Anti-DDoS y Optimización: contadores en vivo (cada segundo) para la gráfica del panel
+After=antiddos-fw.service
+
+[Service]
+Type=simple
+ExecStart=${SBIN_FW} watch
+Restart=always
+RestartSec=3
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
     cat > "${UNIT_DIR}/antiddos-sync.timer" <<EOF
 [Unit]
 Description=Anti-DDoS y Optimización: sincronizar bloqueos con el panel cada 30 s
@@ -148,20 +149,14 @@ AccuracySec=5s
 [Install]
 WantedBy=timers.target
 EOF
+}
 
-    cat > "${UNIT_DIR}/antiddos-tune.service" <<EOF
-[Unit]
-Description=Anti-DDoS y Optimización: ajustes de rendimiento del sistema (THP, governor)
-After=local-fs.target
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=${SBIN_TUNE} runtime
-
-[Install]
-WantedBy=multi-user.target
-EOF
+remove_legacy_tune() {
+    systemctl disable --now antiddos-tune.service >/dev/null 2>&1 || true
+    rm -f "${UNIT_DIR}/antiddos-tune.service" /usr/local/sbin/antiddos-tune \
+          /etc/sysctl.d/97-antiddos-tune.conf /etc/security/limits.d/97-antiddos.conf \
+          /etc/systemd/system/wings.service.d/antiddos.conf
+    rmdir /etc/systemd/system/wings.service.d 2>/dev/null || true
 }
 
 do_install() {
@@ -172,10 +167,10 @@ do_install() {
 
     info "Instalando el firewall en ${SBIN_FW}…"
     install -m 0755 "${SOURCE_DIR}/scripts/antiddos-fw.sh" "$SBIN_FW"
-    install -m 0755 "${SOURCE_DIR}/scripts/optimize-host.sh" "$SBIN_TUNE"
-    sed -i 's/\r$//' "$SBIN_FW" "$SBIN_TUNE"
+    sed -i 's/\r$//' "$SBIN_FW"
+    mkdir -p "$CONF_DIR"
+    tr -d '[:space:]' < "${SOURCE_DIR}/VERSION" > "${CONF_DIR}/version" 2>/dev/null || echo desconocida > "${CONF_DIR}/version"
 
-    # Panel en esta misma maquina: la lista de bloqueos se lee en local (sin clave).
     if [[ -z "$PANEL_LOCAL" && -z "$PANEL_URL" ]]; then
         local d
         for d in /var/www/pterodactyl /var/www/panel /var/www/html/pterodactyl /srv/pterodactyl; do
@@ -201,7 +196,6 @@ do_install() {
         [[ -n "$API_KEY"   ]] && "$SBIN_FW" set API_KEY   "$API_KEY"   >/dev/null
     fi
 
-    # Si SSH escucha en otro puerto, no lo bloqueamos por error.
     local ssh_detected
     ssh_detected="$(ss -Hltnp 2>/dev/null | awk '/sshd/ {n=split($4,a,":"); print a[n]; exit}' || true)"
     if [[ -n "$ssh_detected" && "$ssh_detected" != "22" ]] && grep -q '^SSH_PORT="22"' "$CONF"; then
@@ -209,12 +203,13 @@ do_install() {
         "$SBIN_FW" set SSH_PORT "$ssh_detected" >/dev/null
     fi
 
+    remove_legacy_tune
     write_units
     systemctl daemon-reload
-    systemctl enable antiddos-fw.service antiddos-sync.timer antiddos-tune.service >/dev/null 2>&1 || true
+    systemctl enable antiddos-fw.service antiddos-sync.timer antiddos-live.service >/dev/null 2>&1 || true
     systemctl restart antiddos-fw.service
     systemctl restart antiddos-sync.timer
-    systemctl restart antiddos-tune.service || warn "No se pudieron aplicar todos los ajustes de rendimiento (se ignora)."
+    systemctl restart antiddos-live.service || warn "No se pudo iniciar antiddos-live (la gráfica en vivo no funcionará)."
 
     ok "Agente de nodo instalado y activo."
     echo
@@ -226,14 +221,13 @@ do_install() {
 
 do_uninstall() {
     info "Desinstalando el agente de nodo…"
-    systemctl disable --now antiddos-sync.timer antiddos-fw.service antiddos-tune.service >/dev/null 2>&1 || true
+    systemctl disable --now antiddos-live.service antiddos-sync.timer antiddos-fw.service >/dev/null 2>&1 || true
     [[ -x "$SBIN_FW" ]] && "$SBIN_FW" remove || true
     rm -f "${UNIT_DIR}"/antiddos-fw.service "${UNIT_DIR}"/antiddos-sync.service \
-          "${UNIT_DIR}"/antiddos-sync.timer "${UNIT_DIR}"/antiddos-tune.service
+          "${UNIT_DIR}"/antiddos-sync.timer "${UNIT_DIR}"/antiddos-live.service
     systemctl daemon-reload
-    [[ -x "$SBIN_TUNE" ]] && "$SBIN_TUNE" revert || true
-    rm -f "$SBIN_FW" "$SBIN_TUNE"
-    # La configuración (puertos, clave, lista blanca) se conserva por si se reinstala.
+    rm -f "$SBIN_FW"
+    rm -rf /var/lib/antiddos
     ok "Agente de nodo eliminado. Configuración conservada en ${CONF_DIR} (bórrala si no la quieres)."
 }
 
@@ -243,6 +237,7 @@ do_status() {
         echo
         echo "  Servicio fw     : $(systemctl is-active antiddos-fw.service 2>/dev/null || echo desconocido)"
         echo "  Sync con panel  : $(systemctl is-active antiddos-sync.timer 2>/dev/null || echo desconocido)"
+        echo "  Gráfica en vivo : $(systemctl is-active antiddos-live.service 2>/dev/null || echo desconocido)"
     else
         echo "Anti-DDoS y Optimización — agente de nodo: no instalado (ejecuta: sudo antiddos node-install)"
     fi
@@ -264,8 +259,6 @@ for arg in "$@"; do
     esac
 done
 
-# Los valores acaban en agent.conf, que el firewall carga como shell: solo se
-# admiten caracteres seguros.
 check_value() {
     local name="$1" value="$2" re="$3"
     [[ -z "$value" || "$value" =~ $re ]] || fail "Valor no válido para ${name}: '${value}'"

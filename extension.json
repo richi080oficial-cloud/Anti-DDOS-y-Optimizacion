@@ -1,8 +1,8 @@
 {
   "name": "Anti-DDoS y Optimización",
   "identifier": "antiddos",
-  "version": "1.0.0",
-  "description": "Anti-DDoS (firewall del nodo + escudo del panel) y optimizacion de servidores de Minecraft para Pterodactyl.",
+  "version": "1.14.2",
+  "description": "Anti-DDoS para Pterodactyl: firewall del nodo (iptables/ipset) y escudo del panel, gestionados desde el panel de administracion.",
   "author": "Vexa Studio",
   "target": {
     "panel": ">=1.11.0 <2.0.0",
@@ -25,13 +25,22 @@
     "antiddos unban",
     "antiddos bans",
     "antiddos whitelist",
+    "antiddos asn",
+    "antiddos country",
+    "antiddos ip",
     "antiddos node-install",
     "antiddos node-uninstall",
     "antiddos node-status",
     "antiddos fw",
     "antiddos attack-on",
-    "antiddos attack-off",
-    "antiddos optimize-host",
-    "antiddos optimize-server"
-  ]
+    "antiddos attack-off"
+  ],
+  "vexahub": {
+    "type": "manager",
+    "icon": "fa-shield",
+    "url": "admin/extensions/antiddos",
+    "drop_data": true,
+    "install_note": "Desde Vexa Hub se instala la parte del panel. El firewall del nodo se instala aparte desde la terminal: sudo antiddos install-all",
+    "uninstall_note": "También se quita el firewall del nodo de esta máquina."
+  }
 }

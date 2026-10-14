@@ -2,17 +2,30 @@
 
 Autor: **Vexa Studio**
 
-Anti-DDoS y optimización de servidores de Minecraft para Pterodactyl, en tres capas:
+Anti-DDoS para servidores de Minecraft en Pterodactyl, en dos capas:
 
 | Capa | Dónde se instala | Qué hace |
 | --- | --- | --- |
 | **Agente de nodo** (prioridad) | Cada máquina con **Wings** | Firewall `iptables` + `ipset` + `sysctl` que descarta SYN floods, UDP floods, paquetes malformados y limita las conexiones por IP **antes** de que gasten CPU. Recibe solo los bloqueos del panel. |
-| **Escudo web** | En el **panel** | Limita las peticiones por IP al panel y bloquea a quien se pasa (con duración creciente por reincidencia). Frena la fuerza bruta del login. Opcionalmente, límites en nginx. |
-| **Optimizador** | En el **panel** | Perfiles listos para Minecraft (banderas de la JVM de Aikar, distancias de simulación/visión, mobs, redstone…) que se aplican a los servidores con un clic y se **revierten** cuando quieras. También optimiza el sistema del nodo (swap, THP, BBR, límites de ficheros). |
+| **Escudo web** | En el **panel** | Limita las peticiones por IP al panel y bloquea a quien se pasa (con duración creciente por reincidencia). **Distingue a los usuarios con sesión o clave de API válida** (admins y clientes trabajando): se cuentan por usuario con un límite alto y nunca bloquean su IP; el límite estricto es solo para visitantes anónimos. Antes de bloquear avisa con una pausa breve, y quien es bloqueado ve una página clara que explica el motivo, con cuenta atrás y vuelta automática al panel. Frena la fuerza bruta del login. Opcionalmente, límites en nginx. |
 
-- Panel de administración propio: `/admin/extensions/antiddos` (resumen, escudo web, bloqueos, optimización, nodos, eventos).
+- Panel de administración propio: `/admin/extensions/antiddos` (estado, protección, bloqueos y eventos).
 - Comando `antiddos` con instalación, actualización, desinstalación y todo el control del firewall por consola.
+- **Estado de la instalación en el propio panel**: la pestaña *Estado* dice si está «todo instalado y funcionando» o qué falta (tablas, caché, clave, y el agente de **cada nodo**), con el comando que lo arregla. Los agentes informan al panel cada ~30 s.
+- **Gráfica de tráfico** (pestaña *Tráfico*), pensada como la de OVH pero con más detalle: **↓ Bajada (RX) y ↑ Subida (TX)** reales de la tarjeta de red en Mbit/s, MB/s o KB/s; **paquetes por segundo** (recibidos, TCP, UDP, conexiones nuevas y frenados); y los **motivos de frenado** apilados (IP bloqueada, malformados, ping, límite de conexiones nuevas, UDP, conexiones simultáneas, web). Modo **en vivo** con un punto por segundo (últimos 5 min) y historial de 1 h / 6 h / 24 h / 7 días; unidades, suavizado opcional, escala logarítmica, pausa y exportación a CSV; estadísticas (ahora / media / pico con hora) y las **IPs con más conexiones** con botón para bloquearlas. Velocidades calculadas con milisegundos, huecos como huecos y reinicios de contador detectados.
+- **Puertos poco recomendables** (pestaña *Puertos*): revisa el puerto de cada servidor de Minecraft y marca en rojo los reservados (<1024) o de servicios conocidos (SSH, web, MySQL, Redis, Wings…) y en naranja el puerto por defecto (25565/19132), el rango de puertos temporales de Linux (32768+) y los no protegidos por el firewall. Se cambian con un clic (puerto a elegir o uno recomendado al azar entre 20000 y 32000), uno a uno o en bloque, con reinicio opcional. El cambio mueve la asignación del servidor igual que el panel en *Build Configuration*.
+- **Origen y reputación de cada IP** (pestaña *Tráfico → Quién se está conectando*): país, ciudad, proveedor y ASN de cada IP con muchas conexiones y un **veredicto explicado** (Normal / Sospechosa / Maliciosa) comparando con listas públicas de atacantes (Blocklist.de, Spamhaus DROP, FireHOL Level 1, CINS Army, nodos Tor) y, opcionalmente, AbuseIPDB (clave gratuita). Nunca dice «normal» si no ha podido comprobarlo. Solo se envía la IP a los servicios de consulta y se puede desactivar. Por consola: `sudo antiddos ip 203.0.113.7`.
+- **Modo «bajo ataque» seguro**: no deja a nadie en el limbo. Las IPs con una sesión establecida reciente hacia tus puertos (jugadores reales, redes compartidas, proxies) se recuerdan 6 h y **conservan los límites normales**; las reglas más estrictas (la mitad de conexiones, de conexiones nuevas y UDP, y límite por red /24) solo afectan a IPs desconocidas. Además, los puertos de **Wings (API y SFTP), SSH y 80/443 se excluyen solos** de la protección aunque caigan dentro de un rango de Minecraft (p. ej. el 8080 dentro de `8000:8092`), y las listas largas de puertos se reparten en varias reglas (sin el límite de 15 entradas ni rangos «puenteados»).
+- **Bloqueo automático de IPs maliciosas** (opcional, apagado por defecto; Protección → Origen y reputación de IPs): cuando una IP con conexiones a tus puertos recibe el veredicto «Maliciosa» (aparece en listas públicas de atacantes o AbuseIPDB ≥ 75 %), se bloquea sola en el panel y en todos los nodos, al instante si estás mirando la pestaña Tráfico y, si no, en la pasada del cron de cada minuto. Tú eliges la duración: **24 horas** (recomendado; si sigue siendo maliciosa al caducar se vuelve a bloquear), **7 días** o **para siempre**. Las «Sospechosas» (Tor, hosting/VPN) no se bloquean solas, y nunca se bloquean nodos, panel, Cloudflare, lista blanca ni tu IP. Los bloqueos aparecen en la pestaña Bloqueos con origen «Reputación». Por consola: `sudo antiddos auto-block`.
+- **IPs protegidas**: pestaña propia para que tu dedicado, tus proxies o tu oficina **nunca se bloqueen** (ni en el panel ni en el firewall). Las IPs de la propia máquina, los nodos y el panel se protegen solas.
+- **Bloqueos seguros y explicados**: el firewall informa de cada IP que bloquea, con su **motivo** (flood de conexiones, fuerza bruta SSH, manual) y el veredicto, y un botón **«Es legítima»** la añade a la lista blanca. Política configurable: *Observación* (nunca bloquea), *Equilibrada* (por defecto: frena el exceso y bloquea solo ante un flood claro, 3× el límite) o *Estricta*. Los nodos, los agentes, el panel, Cloudflare, tu IP y la lista blanca **nunca se pueden bloquear**, ni por el escudo web, ni por el firewall, ni a mano.
+- **Detección automática de puertos**: el panel reconoce los eggs de Minecraft (Paper, Spigot, Forge, Bedrock, BungeeCord…), toma el puerto de cada servidor y lo protege solo; se actualiza en menos de un minuto al crear o mover servidores. Opcionalmente protege también sus puertos adicionales (Dynmap, voice chat, query…) y puedes elegir qué eggs cuentan como Minecraft. Los puertos manuales se suman a los detectados.
+- **Firewall editable desde el admin**: puertos TCP/UDP (`25565:25666`), límites por IP y **modo «bajo ataque»** se cambian en la pestaña *Protección* y se envían a todos los nodos sin tocar la consola. Una vez guardados, el panel manda: un `antiddos fw set` manual en el nodo se sobrescribe en la siguiente sincronización.
 - Los bloqueos del panel (manuales o automáticos) **se propagan a todos los nodos** en menos de un minuto.
+- **Bloqueo de operadores (ASN) y países enteros** (cuadro **«Bloquear operador (ASN)»** arriba del panel, visible en todas las pestañas; pestaña *Operadores (ASN)* con la lista; o el botón «🚫 Bloquear ASxxxx» junto a cada IP en *Tráfico*): si el ataque viene de un operador concreto (p. ej. `AS199585 · Operador / residencial`), se bloquean **todos sus rangos de IP**, así que cambiar de IP no le sirve al atacante. Los rangos salen de RIPEstat (lo que el operador anuncia en internet; respaldo: RADB) y para países de RIPEstat/ipdeny; se actualizan solos cada día. Se aplica en el firewall de todos los nodos (todo el tráfico de esa red) y en el panel (403). Duración permanente o temporal. No deja bloquear una red que contenga tu IP, la de tus nodos/panel (el operador de tu propio servidor) o Cloudflare, y pide confirmación para redes de más de 4 millones de IPs. Te da la regla lista para pegar en **Cloudflare WAF**. Por consola: `sudo antiddos asn block AS199585`.
+
+- **Consumo bajo** (1.9.1): el escudo web consulta solo la IP que llega (no la lista entera de bloqueos); el historial de la gráfica se lee como filas simples y se cachea; las tablas de IPs se recalculan como mucho cada 3 s; las listas de reputación no se cargan enteras para saber si están descargadas. En el nodo, la sincronización arranca PHP **una vez** cada 30 s (antes dos) y no recarga los bloqueos si no han cambiado; el modo en vivo pasa de ~14 procesos por segundo a 4.
+- **Historial de la gráfica ligero** (1.9.2): el modo en vivo no usa la base de datos (lee un archivo). El historial guarda 1 muestra cada ~30 s solo las últimas 26 h; de ahí para atrás se queda 1 cada 5 minutos (cada hora se aclara solo) y nada de más de 8 días. Unas 6 veces menos filas, con la gráfica de 7 días igual.
 
 ## Qué puede y qué no puede parar (importante)
 
@@ -22,7 +35,8 @@ Anti-DDoS y Optimización frena todo lo que se puede frenar **en tu propia máqu
 
 Otras limitaciones conocidas:
 
-- Solo IPv4 (el firewall no toca ip6tables).
+- Solo IPv4 (el firewall no toca ip6tables). El bloqueo de operadores/países también es solo IPv4.
+- Bloquear un operador o un país corta también a los jugadores legítimos que lo usen: úsalo con operadores de los que solo llegan ataques.
 - Los floods de **UDP** (Bedrock/Geyser) solo se descartan, no se bloquea la IP de origen, porque suele estar falsificada.
 - Los bloqueos por SYN flood asumen que una IP real que hace cientos de SYN/s es hostil; son temporales (15 min por defecto).
 
@@ -48,10 +62,14 @@ Si el panel y los nodos están en **máquinas distintas**, usa los dos comandos 
 
     bash <(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/Anti-DDOS-y-Optimizacion/main/install.sh) install
 
-**En cada nodo con Wings** (firewall anti-DDoS):
+**En cada nodo con Wings** (firewall anti-DDoS): el repositorio es privado (plugin de pago), así que un nodo que no tiene Vexa Hub no puede clonarlo de GitHub. El propio panel entrega el agente por su API con la clave que ya tiene configurada: entra en **Admin → Anti-DDoS y Optimización** y copia el comando ya rellenado (botón «Copiar»), sin escribirlo a mano (la clave de la cabecera `X-Antiddos-Key` y la de `--key=` tienen que ser exactamente la misma). Tiene esta forma:
 
-    bash <(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/Anti-DDOS-y-Optimizacion/main/install.sh) node-install \
-        --tcp=25565 --panel-url=https://panel.tudominio.com --key=LA_CLAVE_DE_LA_API
+    d=$(mktemp -d); http=$(curl -sS -w "%{http_code}" -o "$d/bundle.tar.gz" -H "X-Antiddos-Key: LA_CLAVE_DE_LA_API" https://panel.tudominio.com/api/antiddos/agent-bundle);
+    if [ "$http" != "200" ]; then echo "El panel respondió HTTP $http:"; cat "$d/bundle.tar.gz"; rm -rf "$d"; false;
+    else tar xzf "$d/bundle.tar.gz" -C "$d" && bash "$d/scripts/node-agent.sh" install --tcp=25565 --panel-url=https://panel.tudominio.com --key=LA_CLAVE_DE_LA_API \
+        && install -m 0755 "$d/antiddos.sh" /usr/local/bin/antiddos; rm -rf "$d"; fi
+
+Si el `HTTP` que imprime no es 200, el propio mensaje dice el motivo (clave incorrecta, panel sin actualizar, etc.).
 
 - `--tcp` puertos TCP de Minecraft a proteger (coma o rangos: `25565,25570:25600`; máx. 15 entradas). Si no lo indicas, el instalador te lo pregunta.
 - `--udp` puertos UDP (Bedrock/Geyser: `19132`).
@@ -75,9 +93,11 @@ Qué hace el instalador del nodo (`scripts/node-agent.sh`):
 
 1. Instala `iptables`, `ipset` y `curl` si faltan.
 2. Copia el firewall a `/usr/local/sbin/antiddos-fw` y crea `/etc/antiddos/agent.conf` (se conserva en reinstalaciones).
-3. Crea y activa los servicios systemd: `antiddos-fw.service` (reglas al arrancar), `antiddos-sync.timer` (descarga bloqueos cada 30 s) y `antiddos-tune.service` (ajustes de rendimiento).
+3. Crea y activa los servicios systemd: `antiddos-fw.service` (reglas al arrancar), `antiddos-sync.timer` (descarga bloqueos cada 30 s).
 
 Si ya estaba instalado, el instalador del panel ofrece **Reinstalar** (no toca la base de datos), **Actualizar** o **Cancelar**, igual que ServerSplitter.
+
+Para actualizar el agente de un nodo remoto **sin entrar por SSH**, en **Admin → Anti-DDoS y Optimización → Estado** cada nodo con el agente ya instalado tiene un botón **«Actualizar agente ahora»**: lo pide el panel y el propio nodo se descarga la versión nueva de aquí mismo (nunca de GitHub) en menos de 30 s, la próxima vez que sincroniza.
 
 ## Comandos
 
@@ -98,23 +118,23 @@ Si ya estaba instalado, el instalador del panel ofrece **Reinstalar** (no toca l
 | `sudo antiddos node-install [--tcp= --udp= --web= --ssh= --panel-url= --key=]` | Instala el firewall anti-DDoS |
 | `sudo antiddos node-uninstall` | Quita el agente (conserva `/etc/antiddos`) |
 | `sudo antiddos node-status` | Estado del firewall |
-| `sudo antiddos attack-on` / `attack-off` | **Modo «bajo ataque»**: límites ~3 veces más estrictos |
+| `sudo antiddos attack-on` / `attack-off` | **Modo «bajo ataque»**: límites a la mitad y por red /24, **solo para IPs desconocidas** (los jugadores ya conectados conservan los normales) |
 | `sudo antiddos fw status` | Estado, límites y paquetes descartados |
 | `sudo antiddos fw top` | IPs con más conexiones a tus puertos |
 | `sudo antiddos fw apply` / `remove` | Reaplica / quita todas las reglas |
 | `sudo antiddos fw set CLAVE VALOR` | Cambia un ajuste (luego `fw apply`) |
 | `sudo antiddos fw sync` | Descarga ya los bloqueos del panel |
-| `sudo antiddos optimize-host [status\|apply\|revert]` | Ajustes del sistema del nodo |
 | **Bloqueos** (firewall local y/o panel según lo que haya en la máquina) | |
 | `sudo antiddos ban 1.2.3.4 [minutos]` | Bloquea una IP (`0`/vacío = permanente) |
 | `sudo antiddos unban 1.2.3.4` | Desbloquea |
 | `sudo antiddos bans` | Lista los bloqueos activos |
-| `sudo antiddos whitelist add\|del\|list [IP\|CIDR]` | Lista blanca |
-| **Optimización de servidores** | |
-| `sudo antiddos optimize-server list` | Perfiles y servidores de Minecraft con su estado |
-| `sudo antiddos optimize-server apply --profile=balanced --server=12` | Aplica un perfil a un servidor (ID o uuidShort) |
-| `sudo antiddos optimize-server apply --profile=crowded --all --restart` | A todos, reiniciando los encendidos |
-| `sudo antiddos optimize-server revert --all` | Revierte la optimización |
+| `sudo antiddos whitelist add\|del\|list [IP\|CIDR]` | IPs protegidas (lista blanca; también desde el panel: pestaña «IPs protegidas») |
+| `sudo antiddos ip 203.0.113.7` | Origen, operador (ASN), reputación y si se puede bloquear |
+| **Operadores y países** (en la máquina del panel; llegan a todos los nodos) | |
+| `sudo antiddos asn block AS199585 [--hours=24] [--reason="DDoS"]` | Bloquea un operador entero, también sus IPs nuevas (vacío = permanente) |
+| `sudo antiddos asn unblock AS199585` · `asn list` · `asn refresh` | Desbloquea · lista (con la regla para Cloudflare) · vuelve a descargar los rangos |
+| `sudo antiddos country block PL [--hours=24]` | Bloquea un país entero (redes de más de 4 M de IPs: añade `--force`) |
+| `sudo antiddos country unblock PL` · `country list` | Desbloquea · lista |
 | **Nginx (panel)** | |
 | `sudo antiddos nginx-on [--rate=20 --burst=100 --conn=50]` | Límites de peticiones en nginx (capa 7) |
 | `sudo antiddos nginx-off` / `nginx-status` | Quita / muestra |
@@ -126,9 +146,11 @@ Variables de entorno: `PANEL_DIR`, `WEB_USER`, `REPO_URL`, `REPO_BRANCH`, `SRC_D
 
 Todo vive en dos cadenas propias (`ANTIDDOS` en la tabla `raw`, `ANTIDDOS_M` en `mangle`) y en sets de `ipset`, así que **no toca tus reglas ni las de Docker**:
 
-1. **`raw/PREROUTING`** (antes de conntrack, por lo que un ataque no llena la tabla de conexiones): lista blanca → bloqueos (locales y del panel) → fragmentos y combinaciones ilegales de flags TCP → límite de ping → **límite de SYN por IP** (si se supera, la IP se bloquea `BAN_SECONDS` con `-j SET --add-set … --timeout`, sin procesos externos) → límite SSH → límite UDP.
-2. **`mangle/PREROUTING`**: **límite de conexiones simultáneas por IP** (`connlimit`).
-3. **`sysctl`**: SYN cookies, backlog, tiempos de conntrack, `rp_filter`, etc.
+1. **`raw/PREROUTING`** (antes de conntrack, por lo que un ataque no llena la tabla de conexiones): lista blanca → bloqueos (IPs locales y del panel, **operadores y países bloqueados**) → fragmentos y combinaciones ilegales de flags TCP → límite de ping → **amplificación UDP** (paquetes que llegan a tus puertos desde puertos de DNS, NTP, memcached, SSDP, CLDAP… son respuestas falsas de un ataque) → **límite de SYN por IP** (si se supera, la IP se bloquea `BAN_SECONDS` con `-j SET --add-set … --timeout`, sin procesos externos) → en modo «bajo ataque», **límite por red /24** (frena botnets que reparten el ataque entre muchas IPs del mismo operador) → límite SSH → límite UDP.
+2. **`mangle/PREROUTING`**: **TCP fuera de conexión** (floods de ACK/RST: con `nf_conntrack_tcp_loose=0` quedan como INVALID y se descartan sin ocupar la tabla de conexiones) y **límite de conexiones simultáneas por IP** (`connlimit`).
+3. **`sysctl`**: SYN cookies, backlog de SYN (65536), colas de la tarjeta (`netdev_max_backlog` 65536, `netdev_budget`), tiempos de conntrack (conexiones muertas fuera en 6 h, no en 5 días), `rp_filter`, etc.
+
+Las tablas de los límites por IP (`hashlimit`) admiten hasta 262.144 IPs distintas: con la tabla por defecto del kernel (unas miles) un flood con muchas IPs la llena y el kernel empieza a descartar también a los jugadores nuevos. Los bloqueos del panel se cargan de golpe con `ipset restore` (miles de rangos en un solo paso) y, si el panel responde con un error, se conservan los anteriores.
 
 Funciona con los puertos que publica Docker/Wings porque `raw` y `mangle` se evalúan antes del DNAT: el puerto que ve es el publicado.
 
@@ -143,7 +165,8 @@ Valores por defecto (en `/etc/antiddos/agent.conf`):
 | `SYN_RATE` / `SYN_BURST` | `15` / `30` | SYN nuevos por segundo y ráfaga antes de bloquear |
 | `UDP_RATE` / `UDP_BURST` | `400` / `800` | Paquetes UDP por segundo y ráfaga |
 | `BAN_SECONDS` | `900` | Duración del bloqueo automático |
-| `ATTACK_MODE` | `0` | `1` = límites ÷3 y bloqueos ×4 |
+| `ATTACK_MODE` | `0` | `1` = reglas extra más estrictas solo para IPs sin sesión establecida reciente (no cambia los límites base) |
+| `EXCLUDE_PORTS` | *(vacío)* | Puertos que nunca se protegen, además de SSH, 80, 443 y los de Wings (se leen de `/etc/pterodactyl/config.yml`) |
 | `STATIC_WHITELIST` | redes privadas | Nunca se bloquean (127/8, 10/8, 172.16/12, 192.168/16) |
 
 Si hay muchos jugadores tras una misma IP (cibercafé, colegio, CGNAT móvil) sube `CONN_LIMIT` o añade el rango a la lista blanca.
@@ -155,42 +178,18 @@ Los bloqueos automáticos se registran en el journal: `journalctl -k | grep ANTI
 - Se registra como middleware global, **después** de `TrustProxies` (ve la IP real detrás de nginx/Cloudflare si `TRUSTED_PROXIES` está bien configurado) y antes de sesión y base de datos: un bloqueado recibe un `429` casi gratis.
 - No cuenta la API de Wings (`api/remote/*`), el feed de los nodos ni los assets estáticos. Las IPs privadas/loopback y las de la lista blanca nunca se bloquean.
 - Por defecto: 480 peticiones/minuto y 15 intentos de login/minuto por IP; primer bloqueo de 30 min que se **duplica en cada reincidencia** hasta 24 h.
+- Las IPs de un operador o país bloqueado reciben un `403` directo (sin contar ni tocar la base de datos).
+- **Con el panel detrás de Cloudflare**, un flood HTTP de millones de peticiones se para mejor **en Cloudflare**, antes de llegar a tu servidor: la pestaña *Operadores (ASN)* te da la expresión exacta (`(ip.src.asnum in {199585})`) para una regla *WAF → Custom rules → Block*.
 - Si el panel ve siempre la IP de un proxy interno (porque `TRUSTED_PROXIES` no está configurado) todas las peticiones parecen internas y el escudo no actúa: falla «abierto» a propósito, para no bloquear a todos tus usuarios.
 - Un fallo del escudo (caché caída, migraciones pendientes…) nunca tumba el panel: la petición pasa.
 
 Para cortar ataques HTTP **antes de PHP**, activa también los límites de nginx: `sudo antiddos nginx-on` (valida con `nginx -t` y se deshace solo si falla; se niega a activarse si detecta un proxy delante sin `set_real_ip_from`).
-
-## Optimización de servidores
-
-Perfiles (pestaña **Optimización** o `optimize-server`):
-
-| Perfil | Para quién | `view-distance` / `simulation-distance` |
-| --- | --- | --- |
-| `light` Ligero | Servidores pequeños; casi no cambia la jugabilidad | 10 / 8 |
-| `balanced` Equilibrado | La mayoría (10-40 jugadores) | 8 / 6 |
-| `crowded` Muchos jugadores | 40+ jugadores o poca CPU por jugador | 6 / 4 |
-
-Qué se cambia:
-
-1. **Comando de arranque** (`servers.startup`): banderas de la JVM de Aikar y `-Xms`/`-Xmx` = el 90 % de la RAM del servidor (configurable, para que Docker no mate el contenedor por memoria nativa). Solo si el comando tiene la forma `java … -jar …`; conserva las propiedades `-D…` existentes.
-2. **Archivos** (vía Wings): `server.properties`, `spigot.yml`, `bukkit.yml` y `config/paper-world-defaults.yml` (distancias, rango de actividad y seguimiento de entidades, límites de mobs, explosiones, redstone alternativa en `crowded`…).
-
-Seguridad:
-
-- **Solo se modifican claves que ya existen** en cada archivo (nunca se inventan claves que tu versión no tenga).
-- Antes de tocar un archivo se guarda `<archivo>.antiddos.bak` en el propio servidor; el comando de arranque original se guarda en la base de datos. **Revertir** restaura ambos.
-- Al reescribir los YAML se pierden los comentarios del archivo (por eso existe la copia). Los `.properties` conservan comentarios y orden.
-- Si un archivo aún no existe (servidor que nunca arrancó), se omite: vuelve a aplicar el perfil tras el primer arranque.
-- Los cambios surten efecto al reiniciar el servidor (`--restart` / casilla «Reiniciar» lo hace por ti si estaba encendido).
-
-Optimización del sistema del nodo (`sudo antiddos optimize-host apply`): `vm.swappiness=10`, THP en `madvise`, governor `performance` (si existe), BBR + `fq`, buffers de red, `fs.file-max` y `LimitNOFILE` de Wings (reinicia Wings para que el límite surta efecto). `optimize-host revert` quita los archivos.
 
 ## Desinstalación
 
     sudo antiddos uninstall               # conserva las tablas
     sudo antiddos uninstall --drop-data   # y las borra
 
-Quita la extensión, el parche del menú, el provider, el agente de nodo (reglas, servicios, sets), los límites de nginx, el cron y el comando. **Las optimizaciones ya aplicadas a servidores no se revierten solas**: usa antes `sudo antiddos optimize-server revert --all`.
 
 ## Solución de problemas
 
@@ -206,3 +205,10 @@ Quita la extensión, el parche del menú, el provider, el agente de nodo (reglas
 ## Licencia
 
 MIT · Vexa Studio
+
+
+## Menú lateral
+
+Con [Vexa Hub](https://github.com/richi080oficial-cloud/VexaHub) instalado, la entrada de **Anti-DDoS y Optimización** **no aparece en el menú lateral** del admin: se abre desde su tarjeta en Vexa Hub (botón *Ajustes*). Para tenerla a mano, marca **«Mostrar Anti-DDoS y Optimización en el menú lateral»** arriba en su página de ajustes.
+
+El ajuste es común a todos los plugins de Vexa Studio (`vexahub::pinned` en la tabla `settings` del panel) y también se cambia desde Vexa Hub → Configuración. Sin Vexa Hub la entrada se muestra siempre. Si algo falla al leer el ajuste, la entrada se muestra: un plugin nunca se queda sin forma de abrirlo.

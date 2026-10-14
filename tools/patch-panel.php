@@ -2,25 +2,6 @@
 
 declare(strict_types=1);
 
-/**
- * Integra Anti-DDoS y Optimización en el menu lateral del admin sin romper nada.
- *
- * Uso:
- *   php patch-panel.php patch    /var/www/pterodactyl
- *   php patch-panel.php unpatch  /var/www/pterodactyl
- *   php patch-panel.php status   /var/www/pterodactyl
- *
- * Solo toca resources/views/layouts/admin.blade.php (entrada en el menu
- * lateral). Todo lo insertado queda entre los marcadores antiddos:begin/end,
- * asi que aplicar el parche dos veces no duplica nada y 'unpatch' lo deja como
- * estaba. Antes de escribir se crea <archivo>.antiddos.bak.
- *
- * Es solo comodidad: el middleware AdminSidebarLink anade el mismo enlace en
- * tiempo de ejecucion si este parche no esta (temas de terceros, updates...).
- *
- * Codigos de salida: 0 correcto, 1 error de uso/escritura, 2 ancla no encontrada.
- */
-
 const MARK_BEGIN = '{{-- antiddos:begin --}}';
 const MARK_END = '{{-- antiddos:end --}}';
 
@@ -71,7 +52,6 @@ if ($mode === 'unpatch') {
     exit(0);
 }
 
-// mode === patch
 if ($patched) {
     echo "[$label] Ya estaba parcheado.\n";
     exit(0);
@@ -88,13 +68,6 @@ writeFile($file, $updated);
 echo "[$label] Parche aplicado.\n";
 exit(0);
 
-// ---------------------------------------------------------------------------
-// Inserciones
-// ---------------------------------------------------------------------------
-
-/**
- * Anade la entrada de Anti-DDoS y Optimización al final de <ul class="sidebar-menu">.
- */
 function insertSidebarEntry(string $contents): ?string
 {
     $close = findSidebarClose($contents);
@@ -106,11 +79,8 @@ function insertSidebarEntry(string $contents): ?string
     $indent = indentOfLineAt($contents, $close);
     $inner = $indent . '    ';
 
-    // Solo clases de AdminLTE: la entrada hereda el skin activo (claro, oscuro
-    // o tema de terceros). La cabecera "VEXA STUDIO" es compartida entre todos
-    // los plugins de Vexa Studio: se imprime una sola vez por peticion via un
-    // guard en $GLOBALS, sin importar cuantos esten instalados.
     $block = wrap($indent, [
+        $inner . '@if (class_exists(\\Pterodactyl\\Extensions\\AntiDDoS\\Support\\Sidebar::class) && \\Pterodactyl\\Extensions\\AntiDDoS\\Support\\Sidebar::visible())',
         $inner . '@if (empty($GLOBALS[\'__vexastudios_sidebar_header\']))',
         $inner . '    <li class="header">VEXA STUDIO</li>',
         $inner . '    @php($GLOBALS[\'__vexastudios_sidebar_header\'] = true)',
@@ -120,6 +90,7 @@ function insertSidebarEntry(string $contents): ?string
         $inner . '        <i class="fa fa-shield"></i> <span>Anti-DDoS y Optimización</span>',
         $inner . '    </a>',
         $inner . '</li>',
+        $inner . '@endif',
     ]);
 
     $lineStart = lineStartAt($contents, $close);
@@ -127,9 +98,6 @@ function insertSidebarEntry(string $contents): ?string
     return substr($contents, 0, $lineStart) . $block . substr($contents, $lineStart);
 }
 
-/**
- * @param array<int, string> $lines
- */
 function wrap(string $indent, array $lines): string
 {
     $out = $indent . MARK_BEGIN . "\n";
@@ -148,16 +116,6 @@ function removeBlocks(string $contents): string
     return is_string($updated) ? $updated : $contents;
 }
 
-// ---------------------------------------------------------------------------
-// Utilidades de texto
-// ---------------------------------------------------------------------------
-
-/**
- * Posicion del </ul> que cierra el menu lateral del admin.
- *
- * La apertura se localiza por el atributo class (sidebar-menu) y el cierre
- * contando aperturas/cierres de <ul>, asi tolera submenus (treeview-menu).
- */
 function findSidebarClose(string $contents): ?int
 {
     $after = null;

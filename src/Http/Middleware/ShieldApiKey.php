@@ -7,14 +7,6 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldSetting;
 
-/**
- * Autentica a los nodos que descargan la lista de bloqueos.
- *
- * La clave se envia en la cabecera X-Antiddos-Key (o como Bearer token) y se
- * compara contra el hash guardado en la base de datos. Sin clave configurada
- * la API queda cerrada (la instalacion genera una automaticamente la primera
- * vez: ver antiddos:manage apikey --if-missing).
- */
 class ShieldApiKey
 {
     public function handle(Request $request, Closure $next): mixed

@@ -5,12 +5,6 @@ namespace Pterodactyl\Extensions\AntiDDoS\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Cache;
 
-/**
- * Almacen clave/valor de la configuracion de Anti-DDoS y Optimización.
- *
- * Se usan nombres de metodo propios (read/write/snapshot) para no colisionar
- * con los metodos estaticos que Eloquent reenvia al query builder.
- */
 class ShieldSetting extends Model
 {
     public const CACHE_KEY = 'antiddos:settings';
@@ -19,12 +13,6 @@ class ShieldSetting extends Model
 
     protected $fillable = ['key', 'value'];
 
-    /**
-     * Configuracion completa (defaults del archivo de config + overrides de BD),
-     * ya convertida a los tipos correctos.
-     *
-     * @return array<string, mixed>
-     */
     public static function snapshot(): array
     {
         $defaults = (array) config('antiddos.defaults', []);
@@ -33,7 +21,6 @@ class ShieldSetting extends Model
             try {
                 return self::query()->pluck('value', 'key')->all();
             } catch (\Throwable $e) {
-                // La tabla puede no existir todavia (por ejemplo durante migrate).
                 return [];
             }
         });
@@ -47,9 +34,6 @@ class ShieldSetting extends Model
         return $out;
     }
 
-    /**
-     * Lee un unico valor de configuracion.
-     */
     public static function read(string $key, mixed $fallback = null): mixed
     {
         $snapshot = self::snapshot();
@@ -67,11 +51,6 @@ class ShieldSetting extends Model
         return $row ? $row->value : $fallback;
     }
 
-    /**
-     * Escribe uno o varios valores y limpia la cache.
-     *
-     * @param array<string, mixed> $values
-     */
     public static function write(array $values): void
     {
         foreach ($values as $key => $value) {

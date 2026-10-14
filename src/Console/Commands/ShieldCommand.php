@@ -3,45 +3,49 @@
 namespace Pterodactyl\Extensions\AntiDDoS\Console\Commands;
 
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
-use Pterodactyl\Extensions\AntiDDoS\Models\ServerOptimization;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldBlock;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldEvent;
+use Pterodactyl\Extensions\AntiDDoS\Models\ShieldNetBlock;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldSetting;
+use Pterodactyl\Extensions\AntiDDoS\Services\AgentRegistry;
+use Pterodactyl\Extensions\AntiDDoS\Services\AutoBlocker;
 use Pterodactyl\Extensions\AntiDDoS\Services\BlockManager;
+use Pterodactyl\Extensions\AntiDDoS\Services\IpIntel;
 use Pterodactyl\Extensions\AntiDDoS\Services\IpMatcher;
-use Pterodactyl\Extensions\AntiDDoS\Services\OptimizationProfiles;
-use Pterodactyl\Extensions\AntiDDoS\Services\ServerOptimizer;
-use Pterodactyl\Models\Server;
+use Pterodactyl\Extensions\AntiDDoS\Services\MetricsService;
+use Pterodactyl\Extensions\AntiDDoS\Services\NetworkBlocks;
+use Pterodactyl\Extensions\AntiDDoS\Services\ReputationLists;
+use Pterodactyl\Extensions\AntiDDoS\Services\SafeIps;
 
 class ShieldCommand extends Command
 {
     protected $signature = 'antiddos:manage
-                            {action=info : info | apikey | purge | prune | feed | ban | unban | bans | whitelist | optimize}
-                            {args?* : Argumentos de la accion (IP, add|del|list, apply|revert|list...)}
+                            {action=info : info | ip | refresh-lists | auto-block | apikey | purge | prune | feed | ban | unban | bans | whitelist | asn | country | refresh-nets | compact-metrics | heartbeat | sync}
+                            {args?* : Argumentos de la accion (IP, add|del|list, block|unblock|list AS199585)}
                             {--key= : Clave concreta a usar con la accion apikey}
                             {--if-missing : Con apikey, no hace nada si ya existe una clave}
-                            {--force : No pedir confirmacion (necesario para purge)}
+                            {--force : No pedir confirmacion (purge) o bloquear una red muy grande (asn/country)}
                             {--minutes= : Duracion del bloqueo en minutos (ban); vacio = permanente}
+                            {--hours= : Duracion del bloqueo en horas (asn/country); vacio = permanente}
                             {--reason= : Motivo del bloqueo (ban)}
-                            {--profile= : Perfil de optimizacion (light|balanced|crowded)}
-                            {--server= : ID numerico o uuidShort del servidor a optimizar/revertir}
-                            {--all : Aplicar a todos los servidores de Minecraft}
-                            {--no-flags : No tocar el comando de arranque}
-                            {--no-files : No tocar los archivos de configuracion}
-                            {--restart : Reiniciar los servidores encendidos}';
+                            {--payload= : JSON del latido (lo envia el agente de nodo local)}
+                            {--host= : Nombre del host que pide el feed (lo envia el agente de nodo local)}';
 
     protected $description = 'Utilidades internas de Anti-DDoS y Optimización (usadas por el CLI antiddos).';
 
     protected const TABLES = [
-        'antiddos_optimizations',
+        'antiddos_net_blocks',
+        'antiddos_metrics',
+        'antiddos_agents',
         'antiddos_events',
         'antiddos_blocks',
         'antiddos_settings',
     ];
 
-    public function handle(BlockManager $blocks, ServerOptimizer $optimizer): int
+    public function handle(BlockManager $blocks): int
     {
         $action = (string) $this->argument('action');
         $args = array_values((array) $this->argument('args'));
@@ -57,12 +61,20 @@ class ShieldCommand extends Command
             'apikey' => $this->apiKey(),
             'purge' => $this->purge(),
             'prune' => $this->prune($blocks),
+            'ip' => $this->ip($args),
+            'refresh-lists' => $this->refreshLists(),
+            'auto-block' => $this->autoBlock(),
             'feed' => $this->feed($blocks),
+            'heartbeat' => $this->heartbeat(),
+            'sync' => $this->sync($blocks),
             'ban' => $this->ban($blocks, $args),
             'unban' => $this->unban($blocks, $args),
             'bans' => $this->bans($blocks),
             'whitelist' => $this->whitelist($args),
-            'optimize' => $this->optimize($optimizer, $args),
+            'asn', 'operador' => $this->net('asn', $args),
+            'country', 'pais' => $this->net('country', $args),
+            'refresh-nets' => $this->refreshNets(),
+            'compact-metrics' => $this->compactMetrics(),
             default => $this->unknown($action),
         };
     }
@@ -83,7 +95,6 @@ class ShieldCommand extends Command
         $this->table(['Metrica', 'Total'], [
             ['IPs bloqueadas ahora', (string) (new BlockManager())->active()->count()],
             ['Eventos registrados', (string) ShieldEvent::query()->count()],
-            ['Servidores optimizados', (string) ServerOptimization::query()->count()],
             ['Clave de API configurada', (string) (ShieldSetting::read('api_key_hash') ? 'si' : 'no')],
         ]);
 
@@ -93,19 +104,19 @@ class ShieldCommand extends Command
     protected function apiKey(): int
     {
         if ($this->option('if-missing') && (string) (ShieldSetting::read('api_key_hash') ?? '') !== '') {
-            // La instalacion la llama en cada install/update para que la clave
-            // se genere sola la primera vez; en las siguientes ya existe y no
-            // hay que tocarla (invalidaria a los nodos ya configurados).
             return self::SUCCESS;
         }
 
         $key = (string) ($this->option('key') ?: Str::random(48));
 
-        ShieldSetting::write(['api_key_hash' => password_hash($key, PASSWORD_DEFAULT)]);
+        ShieldSetting::write([
+            'api_key_hash' => password_hash($key, PASSWORD_DEFAULT),
+            'api_key_enc' => Crypt::encryptString($key),
+        ]);
 
         $this->newLine();
         $this->line('<info>Clave de API de Anti-DDoS y Optimización generada.</info>');
-        $this->line('Guardala ahora, no se puede volver a mostrar:');
+        $this->line('También podrás verla luego en Admin → Anti-DDoS y Optimización:');
         $this->newLine();
         $this->line("  <comment>$key</comment>");
         $this->newLine();
@@ -117,7 +128,7 @@ class ShieldCommand extends Command
 
     protected function purge(): int
     {
-        if (!$this->option('force') && !$this->confirm('Se eliminaran TODAS las tablas de Anti-DDoS y Optimización. Las optimizaciones aplicadas a servidores NO se revierten. Continuar?', false)) {
+        if (!$this->option('force') && !$this->confirm('Se eliminaran TODAS las tablas de Anti-DDoS y Optimización. Continuar?', false)) {
             $this->line('Cancelado.');
 
             return self::SUCCESS;
@@ -147,15 +158,109 @@ class ShieldCommand extends Command
         return self::SUCCESS;
     }
 
-    /** Lista de bloqueos y lista blanca en texto plano (la lee el agente de nodo local). */
-    protected function feed(BlockManager $blocks): int
+    protected function ip(array $args): int
     {
-        $this->getOutput()->write($blocks->feed());
+        $ip = (string) ($args[0] ?? '');
+
+        if (filter_var($ip, FILTER_VALIDATE_IP) === false) {
+            $this->error('Uso: antiddos ip 203.0.113.7');
+
+            return self::FAILURE;
+        }
+
+        if (!app(ReputationLists::class)->anyLoaded()) {
+            $this->line('<comment>Las listas de reputación no están descargadas; se descargan ahora…</comment>');
+            $this->refreshLists();
+        }
+
+        $intel = app(IpIntel::class)->lookup($ip, true, false);
+        $why = app(SafeIps::class)->protectedReason($ip);
+
+        $this->table(['Campo', 'Valor'], [
+            ['IP', $ip],
+            ['Veredicto', ($intel['verdict_text'] ?? '—')],
+            ['País', trim(($intel['flag'] ?? '') . ' ' . ($intel['country'] ?? '—'))],
+            ['Ciudad / región', trim(($intel['city'] ?? '—') . ' · ' . ($intel['region'] ?? ''))],
+            ['Proveedor (ASN)', trim(($intel['org'] ?? '—') . ' ' . ($intel['asn'] ?? ''))],
+            ['Tipo de red', (string) ($intel['type'] ?? '—')],
+            ['Listas de atacantes', ($intel['lists'] ?? []) ? implode(', ', $intel['lists']) : 'ninguna'],
+            ['AbuseIPDB', isset($intel['abuse']) && $intel['abuse'] !== null ? $intel['abuse'] . ' %' : 'no configurado'],
+            ['¿Se puede bloquear?', $why ?? 'sí'],
+        ]);
+
+        foreach ((array) ($intel['reasons'] ?? []) as $reason) {
+            $this->line(' · ' . $reason);
+        }
 
         return self::SUCCESS;
     }
 
-    /** @param array<int, string> $args */
+    protected function autoBlock(): int
+    {
+        $auto = app(AutoBlocker::class);
+
+        if (!$auto->enabled()) {
+            $this->line('El bloqueo automático de IPs maliciosas está desactivado (Protección → Origen y reputación de IPs).');
+
+            return self::SUCCESS;
+        }
+
+        $r = $auto->run();
+        $this->line(sprintf('IPs valoradas: %d · consultas nuevas: %d · bloqueadas: %d (%s)', $r['checked'], $r['lookups'], count($r['blocked']), $auto->durationLabel()));
+
+        foreach ($r['blocked'] as $ip) {
+            $this->line("  <comment>⛔</comment> {$ip}");
+        }
+
+        return self::SUCCESS;
+    }
+
+    protected function refreshLists(): int
+    {
+        $this->line('Descargando listas públicas de reputación…');
+
+        foreach (app(ReputationLists::class)->refresh() as $id => $r) {
+            $name = ReputationLists::SOURCES[$id][0];
+            $this->line($r['ok'] ? "  <info>✓</info> {$name}: {$r['count']} entradas" : "  <comment>!</comment> {$name}: {$r['error']}");
+        }
+
+        return self::SUCCESS;
+    }
+
+    protected function heartbeat(): int
+    {
+        $data = json_decode((string) $this->option('payload'), true);
+
+        if (!is_array($data) || app(AgentRegistry::class)->record($data) === null) {
+            $this->error('Payload no valido.');
+
+            return self::FAILURE;
+        }
+
+        return self::SUCCESS;
+    }
+
+    protected function sync(BlockManager $blocks): int
+    {
+        $data = json_decode((string) $this->option('payload'), true);
+
+        if (is_array($data)) {
+            try {
+                app(AgentRegistry::class)->record($data);
+            } catch (\Throwable $e) {
+            }
+        }
+
+        return $this->feed($blocks);
+    }
+
+    protected function feed(BlockManager $blocks): int
+    {
+        $this->getOutput()->write($blocks->feed((string) $this->option('host')));
+
+        return self::SUCCESS;
+    }
+
     protected function ban(BlockManager $blocks, array $args): int
     {
         $ip = (string) ($args[0] ?? '');
@@ -169,13 +274,19 @@ class ShieldCommand extends Command
         $minutes = $this->option('minutes');
         $minutes = ($minutes === null || $minutes === '' || (int) $minutes === 0) ? null : (int) $minutes;
 
-        $blocks->block($ip, $minutes, (string) ($this->option('reason') ?: 'Bloqueo manual (CLI)'), 'manual');
+        try {
+            $blocks->block($ip, $minutes, (string) ($this->option('reason') ?: 'Bloqueo manual (CLI)'), 'manual');
+        } catch (\DomainException $e) {
+            $this->error('No se bloquea: ' . $e->getMessage());
+
+            return self::FAILURE;
+        }
+
         $this->info("IP {$ip} bloqueada " . ($minutes === null ? 'permanentemente' : "{$minutes} minutos") . '.');
 
         return self::SUCCESS;
     }
 
-    /** @param array<int, string> $args */
     protected function unban(BlockManager $blocks, array $args): int
     {
         $ip = (string) ($args[0] ?? '');
@@ -212,7 +323,6 @@ class ShieldCommand extends Command
         return self::SUCCESS;
     }
 
-    /** @param array<int, string> $args */
     protected function whitelist(array $args): int
     {
         $sub = (string) ($args[0] ?? 'list');
@@ -241,102 +351,100 @@ class ShieldCommand extends Command
         return self::SUCCESS;
     }
 
-    /** @param array<int, string> $args */
-    protected function optimize(ServerOptimizer $optimizer, array $args): int
+    protected function net(string $kind, array $args): int
     {
-        $sub = (string) ($args[0] ?? 'list');
+        $nets = app(NetworkBlocks::class);
+        $sub = strtolower((string) ($args[0] ?? 'list'));
+        $value = trim(implode(' ', array_slice($args, 1)));
+        $example = $kind === 'asn' ? 'AS199585' : 'PL';
 
-        if ($sub === 'list') {
-            $this->table(['Perfil', 'Nombre', 'Descripcion'], collect(OptimizationProfiles::all())
-                ->map(fn (array $p, string $k) => [$k, $p['label'], Str::limit($p['description'], 80)])->values()->all());
+        if (in_array($sub, ['list', 'ls'], true)) {
+            $rows = $nets->active()->where('kind', $kind)->map(fn (ShieldNetBlock $b) => [
+                $b->label(),
+                (string) $b->prefix_count,
+                number_format($b->ip_count, 0, ',', '.'),
+                $b->expires_at ? $b->expires_at->diffForHumans() : 'permanente',
+                Str::limit((string) $b->reason, 40),
+            ])->values()->all();
 
-            $servers = $this->minecraftServers();
-            $states = ServerOptimization::query()->pluck('profile', 'server_id');
+            if ($rows === []) {
+                $this->line($kind === 'asn' ? 'No hay operadores bloqueados.' : 'No hay países bloqueados.');
+            } else {
+                $this->table([$kind === 'asn' ? 'Operador' : 'País', 'Rangos', 'IPs', 'Caduca', 'Motivo'], $rows);
+            }
 
-            $this->table(['ID', 'Nombre', 'RAM (MiB)', 'Nodo', 'Optimizado'], $servers->map(fn (Server $s) => [
-                $s->id, Str::limit($s->name, 30), (string) $s->memory, $s->node->name ?? '-', $states[$s->id] ?? '-',
-            ])->all());
+            if (($expr = $nets->cloudflareExpression()) !== null) {
+                $this->line('Regla para Cloudflare (WAF → Reglas personalizadas → Bloquear): <comment>' . $expr . '</comment>');
+            }
 
             return self::SUCCESS;
         }
 
-        if (!in_array($sub, ['apply', 'revert'], true)) {
-            $this->error('Uso: antiddos optimize-server list | apply --profile=P (--server=ID|--all) | revert (--server=ID|--all)');
+        if ($sub === 'refresh') {
+            return $this->refreshNets();
+        }
+
+        if (!in_array($sub, ['block', 'add', 'ban', 'unblock', 'del', 'remove', 'unban'], true) || $value === '') {
+            $this->error("Uso: antiddos {$kind} block|unblock|list {$example} [--hours=24] [--reason=\"motivo\"]");
 
             return self::FAILURE;
         }
 
-        $servers = $this->targetServers();
+        try {
+            if (in_array($sub, ['unblock', 'del', 'remove', 'unban'], true)) {
+                $this->line($nets->unblock($kind, $value) ? "{$value} desbloqueado. Los nodos lo aplican en menos de un minuto." : "{$value} no estaba bloqueado.");
 
-        if ($servers->isEmpty()) {
-            $this->error('Indica --server=ID (o uuidShort) o --all. Usa "optimize-server list" para ver los servidores.');
+                return self::SUCCESS;
+            }
+
+            $hours = $this->option('hours');
+            $hours = ($hours === null || $hours === '' || (int) $hours === 0) ? null : (int) $hours;
+
+            $this->line('Descargando los rangos de IP…');
+            $block = $nets->block($kind, $value, $hours, (string) ($this->option('reason') ?: 'Bloqueo manual (CLI)'), null, null, (bool) $this->option('force'));
+        } catch (\DomainException|\RuntimeException $e) {
+            $this->error('No se bloquea: ' . $e->getMessage());
 
             return self::FAILURE;
         }
 
-        $profile = (string) ($this->option('profile') ?: ShieldSetting::read('default_profile', OptimizationProfiles::DEFAULT));
+        $this->info(sprintf(
+            '%s bloqueado %s: %d rango(s), %s IPs. Los nodos lo aplican en menos de un minuto y el panel ya le responde 403.',
+            $block->label(), $hours === null ? 'permanentemente' : "{$hours} h", $block->prefix_count, number_format($block->ip_count, 0, ',', '.')
+        ));
+        $this->line('Rangos: ' . Str::limit(implode(', ', (array) $block->prefixes), 400));
 
-        if ($sub === 'apply' && OptimizationProfiles::get($profile) === null) {
-            $this->error("Perfil desconocido: {$profile} (usa light, balanced o crowded)");
-
-            return self::FAILURE;
-        }
-
-        $failed = 0;
-
-        foreach ($servers as $server) {
-            $this->line("<info>{$server->name}</info> (#{$server->id})");
-
-            try {
-                $report = $sub === 'apply'
-                    ? $optimizer->apply($server, $profile, !$this->option('no-flags'), !$this->option('no-files'), (bool) $this->option('restart'))
-                    : $optimizer->revert($server, (bool) $this->option('restart'));
-            } catch (\Throwable $e) {
-                $failed++;
-                $this->error('  Error: ' . $e->getMessage());
-
-                continue;
-            }
-
-            foreach ($report['ok'] as $msg) {
-                $this->line("  <info>✓</info> {$msg}");
-            }
-
-            foreach ($report['warn'] as $msg) {
-                $this->line("  <comment>!</comment> {$msg}");
-            }
-        }
-
-        return $failed > 0 ? self::FAILURE : self::SUCCESS;
+        return self::SUCCESS;
     }
 
-    /** @return \Illuminate\Support\Collection<int, Server> */
-    protected function minecraftServers()
+    protected function compactMetrics(): int
     {
-        /** @var ServerOptimizer $optimizer */
-        $optimizer = app(ServerOptimizer::class);
+        try {
+            $n = app(MetricsService::class)->compact();
+        } catch (\Throwable $e) {
+            $this->error('No se pudo aclarar el historial: ' . $e->getMessage());
 
-        return Server::query()->with(['egg', 'nest', 'node'])->orderBy('name')->get()
-            ->filter(fn (Server $s) => $optimizer->isMinecraft($s))
-            ->values();
+            return self::FAILURE;
+        }
+
+        $this->line("Historial de la gráfica aclarado: {$n} muestras antiguas borradas.");
+
+        return self::SUCCESS;
     }
 
-    /** @return \Illuminate\Support\Collection<int, Server> */
-    protected function targetServers()
+    protected function refreshNets(): int
     {
-        if ($this->option('all')) {
-            return $this->minecraftServers();
+        $results = app(NetworkBlocks::class)->refresh();
+
+        if ($results === []) {
+            $this->line('No hay operadores ni países bloqueados.');
         }
 
-        $id = (string) $this->option('server');
-
-        if ($id === '') {
-            return collect();
+        foreach ($results as $label => $result) {
+            $this->line("  {$label}: {$result}");
         }
 
-        return Server::query()->with(['egg', 'nest', 'node'])
-            ->where(fn ($q) => ctype_digit($id) ? $q->where('id', (int) $id) : $q->where('uuidShort', $id))
-            ->get();
+        return self::SUCCESS;
     }
 
     protected function unknown(string $action): int
