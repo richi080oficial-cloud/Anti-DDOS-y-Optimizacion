@@ -62,10 +62,11 @@ Si el panel y los nodos están en **máquinas distintas**, usa los dos comandos 
 
     bash <(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/Anti-DDOS-y-Optimizacion/main/install.sh) install
 
-**En cada nodo con Wings** (firewall anti-DDoS):
+**En cada nodo con Wings** (firewall anti-DDoS): el repositorio es privado (plugin de pago), así que un nodo que no tiene Vexa Hub no puede clonarlo de GitHub. El propio panel entrega el agente por su API con la clave que ya tiene configurada: entra en **Admin → Anti-DDoS y Optimización** y copia el comando ya rellenado (botón «Copiar»), con esta forma:
 
-    bash <(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/Anti-DDOS-y-Optimizacion/main/install.sh) node-install \
-        --tcp=25565 --panel-url=https://panel.tudominio.com --key=LA_CLAVE_DE_LA_API
+    d=$(mktemp -d) && curl -fsSL -H "X-Antiddos-Key: LA_CLAVE_DE_LA_API" https://panel.tudominio.com/api/antiddos/agent-bundle \
+        | tar xz -C "$d" && bash "$d/scripts/node-agent.sh" install --tcp=25565 --panel-url=https://panel.tudominio.com --key=LA_CLAVE_DE_LA_API \
+        && install -m 0755 "$d/antiddos.sh" /usr/local/bin/antiddos && rm -rf "$d"
 
 - `--tcp` puertos TCP de Minecraft a proteger (coma o rangos: `25565,25570:25600`; máx. 15 entradas). Si no lo indicas, el instalador te lo pregunta.
 - `--udp` puertos UDP (Bedrock/Geyser: `19132`).

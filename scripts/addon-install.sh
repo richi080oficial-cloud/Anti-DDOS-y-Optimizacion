@@ -197,6 +197,28 @@ sync_source_copy() {
     chmod 755 "${STATE_DIR}/source/bin/antiddos" 2>/dev/null || true
 }
 
+build_agent_bundle() {
+    local dir="${PANEL_DIR}/storage/app/antiddos" src="${STATE_DIR}/source" tmp
+    [ -f "${src}/antiddos.sh" ] && [ -f "${src}/scripts/node-agent.sh" ] || { warn "No se pudo preparar el paquete del agente para nodos remotos."; return 0; }
+
+    mkdir -p "$dir"
+    tmp="$(mktemp -d)"
+    mkdir -p "${tmp}/bundle"
+    cp "${src}/antiddos.sh" "${src}/VERSION" "${tmp}/bundle/" 2>/dev/null || true
+    [ -f "${src}/bin/antiddos" ] && { mkdir -p "${tmp}/bundle/bin"; cp "${src}/bin/antiddos" "${tmp}/bundle/bin/"; }
+    mkdir -p "${tmp}/bundle/scripts"
+    cp "${src}/scripts/node-agent.sh" "${tmp}/bundle/scripts/" 2>/dev/null || true
+    cp "${src}/scripts/antiddos-fw.sh" "${tmp}/bundle/scripts/" 2>/dev/null || true
+    cp "${src}/scripts/nginx-shield.sh" "${tmp}/bundle/scripts/" 2>/dev/null || true
+
+    ( cd "${tmp}/bundle" && tar -czf "${dir}/agent-bundle.tar.gz.tmp" . ) \
+        && mv -f "${dir}/agent-bundle.tar.gz.tmp" "${dir}/agent-bundle.tar.gz"
+    rm -rf "$tmp"
+    chown "${WEB_USER}:${WEB_USER}" "${dir}" "${dir}/agent-bundle.tar.gz" 2>/dev/null || true
+    chmod 750 "$dir" 2>/dev/null || true
+    chmod 640 "${dir}/agent-bundle.tar.gz" 2>/dev/null || true
+}
+
 app_url() {
     grep -m1 -E '^APP_URL=' "${PANEL_DIR}/.env" 2>/dev/null \
         | sed -E 's/^APP_URL=//; s/^"//; s/"$//; s#/$##' || true
@@ -259,6 +281,7 @@ do_install() {
     artisan "$ARTISAN_NAMESPACE" apikey --if-missing || warn "No se pudo generar la clave de la API; ejecuta 'sudo antiddos apikey' a mano."
 
     install_cli
+    build_agent_bundle
     fix_permissions
     clear_caches
 

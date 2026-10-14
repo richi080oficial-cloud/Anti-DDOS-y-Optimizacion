@@ -22,6 +22,7 @@ WEB_USER="${WEB_USER:-}"
 FORCE="${FORCE:-0}"
 DROP_DATA="${DROP_DATA:-0}"
 API_KEY=""
+NODE_PANEL_URL=""
 PASSTHRU=()
 
 if [ -t 1 ]; then
@@ -262,7 +263,7 @@ do_reinstall() {
 do_update() {
     check_disk
     if [[ -z "$(detect_panel)" ]] && node_installed; then
-        sync_sources
+        fetch_from_panel || sync_sources
         info "Actualizando el agente de nodo…"
         bash "$(kit_dir)/$NODE_REL" install --yes
         install_cli
@@ -364,8 +365,45 @@ do_install_all() {
     info "Panel: ${url:-tu-panel}/admin/extensions/antiddos   ·   Estado: sudo antiddos status"
 }
 
+fetch_from_panel() {
+    local url="${NODE_PANEL_URL%/}" key="$API_KEY" conf="/etc/antiddos/agent.conf"
+    if [[ ( -z "$url" || -z "$key" ) && -f "$conf" ]]; then
+        [[ -z "$url" ]] && url="$(grep -m1 -E '^PANEL_URL=' "$conf" 2>/dev/null | sed -E 's/^PANEL_URL="?([^"]*)"?$/\1/')"
+        [[ -z "$key" ]] && key="$(grep -m1 -E '^API_KEY=' "$conf" 2>/dev/null | sed -E 's/^API_KEY="?([^"]*)"?$/\1/')"
+    fi
+    url="${url%/}"
+    [[ -n "$url" && -n "$key" ]] || return 1
+    [[ "$url" =~ ^https?://[A-Za-z0-9._:-]+(/[A-Za-z0-9._~%!\$\&\(\)*+,;=:@/-]*)?$ ]] || return 1
+    require_cmd curl
+
+    local tmp http
+    tmp="$(mktemp -d /tmp/antiddos-bundle.XXXXXX)"
+    info "Descargando el agente desde ${url} (sin pasar por GitHub)…"
+    http="$(curl -sS --max-time 60 -o "$tmp/bundle.tar.gz" -w '%{http_code}' \
+        -H "X-Antiddos-Key: $key" "$url/api/antiddos/agent-bundle" 2>/dev/null)" || http=0
+
+    if [[ "$http" != "200" ]]; then
+        warn "El panel no entregó el agente (HTTP $http): se prueba descargando de GitHub."
+        rm -rf "$tmp"
+        return 1
+    fi
+
+    rm -rf "$SRC_DIR"
+    mkdir -p "$SRC_DIR"
+    if ! tar -xzf "$tmp/bundle.tar.gz" -C "$SRC_DIR" 2>/dev/null || [[ ! -f "$SRC_DIR/$NODE_REL" ]]; then
+        warn "El paquete descargado del panel no es válido: se prueba descargando de GitHub."
+        rm -rf "$tmp" "$SRC_DIR"
+        return 1
+    fi
+
+    find "$SRC_DIR" -name '*.sh' -print0 | xargs -0 -r sed -i 's/\r$//'
+    chmod +x "$SRC_DIR"/*.sh "$SRC_DIR/scripts"/*.sh 2>/dev/null || true
+    rm -rf "$tmp"
+    ok "Agente descargado del panel."
+}
+
 do_node_install() {
-    sync_sources
+    fetch_from_panel || sync_sources
     [[ -f "$(kit_dir)/$NODE_REL" ]] || fail "Falta $NODE_REL en el repositorio."
     bash "$(kit_dir)/$NODE_REL" install "${PASSTHRU[@]}" $([[ "$FORCE" == "1" ]] && echo --yes)
     install_cli
@@ -593,6 +631,7 @@ for arg in "$@"; do
         --force|-y|--yes) FORCE=1 ;;
         --drop-data)      DROP_DATA=1 ;;
         --key=*)          API_KEY="${arg#*=}"; PASSTHRU+=("$arg") ;;
+        --panel-url=*)    NODE_PANEL_URL="${arg#*=}"; PASSTHRU+=("$arg") ;;
         --panel=*)        PANEL_DIR="${arg#*=}" ;;
         --user=*)         WEB_USER="${arg#*=}" ;;
         --*)              PASSTHRU+=("$arg") ;;

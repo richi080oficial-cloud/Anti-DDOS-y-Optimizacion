@@ -17,7 +17,12 @@
     @php
         $matchedIds = collect($health['nodes'])->pluck('agent.id')->filter()->all();
         $otherAgents = $health['agents']->reject(fn ($a) => in_array($a->id, $matchedIds, true));
-        $installCmd = 'bash <(curl -sSL https://raw.githubusercontent.com/richi080oficial-cloud/Anti-DDOS-y-Optimizacion/main/install.sh) node-install --tcp=' . ($fw['tcp'] ?: '25565') . ' --panel-url=' . ($panelUrl ?: 'https://tu-panel') . ' --key=' . (session('antiddos:newkey') ?: 'TU_CLAVE');
+        $ik = session('antiddos:newkey') ?: 'TU_CLAVE';
+        $ipurl = $panelUrl ?: 'https://tu-panel';
+        $itcp = $fw['tcp'] ?: '25565';
+        $installCmd = 'd=$(mktemp -d) && curl -fsSL -H "X-Antiddos-Key: ' . $ik . '" ' . $ipurl . '/api/antiddos/agent-bundle'
+            . ' | tar xz -C "$d" && bash "$d/scripts/node-agent.sh" install --tcp=' . $itcp . ' --panel-url=' . $ipurl . ' --key=' . $ik
+            . ' && install -m 0755 "$d/antiddos.sh" /usr/local/bin/antiddos && rm -rf "$d"';
     @endphp
 
     <style>

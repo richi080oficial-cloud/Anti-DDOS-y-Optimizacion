@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Pterodactyl\Extensions\AntiDDoS\Http\Controllers\Api\AgentBundleController;
 use Pterodactyl\Extensions\AntiDDoS\Http\Controllers\Api\FeedController;
 use Pterodactyl\Extensions\AntiDDoS\Http\Controllers\Api\HeartbeatController;
 use Pterodactyl\Extensions\AntiDDoS\Http\Controllers\Api\LiveController;
@@ -13,4 +14,5 @@ Route::middleware(['api', 'throttle:300,1', ShieldApiKey::class])
         Route::get('/feed', FeedController::class)->name('feed');
         Route::post('/heartbeat', HeartbeatController::class)->name('heartbeat');
         Route::post('/live', LiveController::class)->name('live');
+        Route::get('/agent-bundle', AgentBundleController::class)->name('agent-bundle');
     });
