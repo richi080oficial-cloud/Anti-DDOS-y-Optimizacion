@@ -106,7 +106,8 @@ class HealthCheck
 
         $key = $key !== '' ? $key : 'TU_CLAVE';
         $url = $url !== '' ? $url : 'https://tu-panel';
-        $tcp = (string) (ShieldSetting::read('fw_tcp_ports') ?: '25565');
+        $tcp = (string) (ShieldSetting::read('fw_tcp_ports') ?: '');
+        $tcp = ($tcp === '' || $tcp === '-') ? '25565' : $tcp;
 
         return 'd=$(mktemp -d); http=$(curl -sS -w "%{http_code}" -o "$d/bundle.tar.gz" -H "X-Antiddos-Key: ' . $key . '" ' . $url . '/api/antiddos/agent-bundle);'
             . ' if [ "$http" != "200" ]; then echo "El panel respondió HTTP $http:"; cat "$d/bundle.tar.gz" 2>/dev/null; echo; rm -rf "$d"; false;'
