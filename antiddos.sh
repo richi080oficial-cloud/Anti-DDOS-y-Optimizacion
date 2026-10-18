@@ -21,6 +21,7 @@ PANEL_DIR="${PANEL_DIR:-}"
 WEB_USER="${WEB_USER:-}"
 FORCE="${FORCE:-0}"
 DROP_DATA="${DROP_DATA:-0}"
+KEEP_NODE="${KEEP_NODE:-0}"
 API_KEY=""
 NODE_PANEL_URL=""
 PASSTHRU=()
@@ -300,7 +301,7 @@ do_uninstall() {
         local tmp; tmp="$(mktemp /tmp/antiddos-XXXXXX.sh)"
         cat "${BASH_SOURCE[0]}" > "$tmp"
         chmod +x "$tmp"
-        ANTIDDOS_DETACHED=1 FORCE="$FORCE" DROP_DATA="$DROP_DATA" \
+        ANTIDDOS_DETACHED=1 FORCE="$FORCE" DROP_DATA="$DROP_DATA" KEEP_NODE="$KEEP_NODE" \
             PANEL_DIR="$PANEL_DIR" WEB_USER="$WEB_USER" exec bash "$tmp" uninstall
     fi
 
@@ -310,7 +311,11 @@ do_uninstall() {
         fail "No se detectó ninguna instalación de Anti-DDoS y Optimización (ni panel ni agente de nodo)."
     fi
 
-    warn "Se eliminará TODO lo de Anti-DDoS y Optimización en esta máquina: extensión del panel, agente de nodo, límites de nginx, cron, comando y el código en $SRC_DIR."
+    if [[ "$KEEP_NODE" == "1" ]]; then
+        warn "Se eliminará SOLO la parte del panel (extensión, límites de nginx y cron). El firewall del nodo, el comando antiddos y su código se conservan."
+    else
+        warn "Se eliminará TODO lo de Anti-DDoS y Optimización en esta máquina: extensión del panel, agente de nodo, límites de nginx, cron, comando y el código en $SRC_DIR."
+    fi
     if [[ "$DROP_DATA" == "1" ]]; then
         warn "Además se BORRARÁN las tablas de Anti-DDoS y Optimización (ajustes, bloqueos, eventos y estado de optimizaciones)."
     else
@@ -329,13 +334,20 @@ do_uninstall() {
         run_installer "${args[@]}" || warn "El desinstalador del panel terminó con errores; se continúa con la limpieza."
     fi
 
-    if node_installed; then
+    if node_installed && [[ "$KEEP_NODE" != "1" ]]; then
         [[ -f "$(kit_dir)/$NODE_REL" ]] && bash "$(kit_dir)/$NODE_REL" uninstall || warn "No se pudo quitar el agente de nodo con el script; revisa 'systemctl list-units antiddos*'."
     fi
 
     [[ -f "$(kit_dir)/scripts/nginx-shield.sh" ]] && bash "$(kit_dir)/scripts/nginx-shield.sh" off >/dev/null 2>&1 || true
 
     autoupdate_off quiet
+
+    if [[ "$KEEP_NODE" == "1" ]]; then
+        ok "Panel desinstalado. El firewall del nodo sigue protegiendo esta máquina con la última configuración que recibió."
+        info "Sin panel ya no recibe bloqueos nuevos. Para quitarlo también: sudo antiddos node-uninstall"
+        return
+    fi
+
     rm -rf "$SRC_DIR"
     rm -f "$CLI_PATH"
     ok "Anti-DDoS y Optimización desinstalado por completo. No queda nada."
@@ -608,6 +620,7 @@ OTROS
 Opciones:
   --force, -y           No pedir confirmación y forzar la actualización
   --drop-data           En uninstall, borra también las tablas de la extensión
+  --keep-node           En uninstall, quita solo el panel y deja el firewall del nodo
   --panel=RUTA          Ruta del panel (por defecto se detecta automáticamente)
   --user=USUARIO        Usuario del servidor web (por defecto se detecta)
   --key=CLAVE           Clave concreta para 'apikey' / 'node-install'
@@ -630,6 +643,7 @@ for arg in "$@"; do
     case "$arg" in
         --force|-y|--yes) FORCE=1 ;;
         --drop-data)      DROP_DATA=1 ;;
+        --keep-node)      KEEP_NODE=1 ;;
         --key=*)          API_KEY="${arg#*=}"; PASSTHRU+=("$arg") ;;
         --panel-url=*)    NODE_PANEL_URL="${arg#*=}"; PASSTHRU+=("$arg") ;;
         --panel=*)        PANEL_DIR="${arg#*=}" ;;

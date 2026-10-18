@@ -113,6 +113,7 @@ Para actualizar el agente de un nodo remoto **sin entrar por SSH**, en **Admin �
 | `sudo antiddos prune` | Limpia bloqueos caducados y eventos antiguos |
 | `sudo antiddos uninstall` | Desinstala todo (conserva las tablas) |
 | `sudo antiddos uninstall --drop-data` | Desinstala y **borra las tablas** |
+| `sudo antiddos uninstall --keep-node` | Quita **solo el panel** y deja el firewall del nodo funcionando |
 | `sudo antiddos autoupdate-on` / `-off` | Actualización automática diaria (04:00) |
 | **Nodo** | |
 | `sudo antiddos node-install [--tcp= --udp= --web= --ssh= --panel-url= --key=]` | Instala el firewall anti-DDoS |
