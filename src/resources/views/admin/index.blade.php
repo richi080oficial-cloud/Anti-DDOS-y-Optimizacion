@@ -363,6 +363,7 @@
                             <span class="pill {{ $banModeManaged ? 'ok' : 'warn' }}">{{ $banModeManaged ? 'Gestionada desde el panel' : 'La del nodo' }}</span></div>
                         <div class="card-b">
                             <p class="muted" style="margin-top:0;">Decide <b>cuándo</b> el firewall bloquea una IP por su cuenta. En todos los modos el exceso de conexiones se frena; lo que cambia es si además se banea.</p>
+                            <p class="muted" style="margin-top:0;"><b>Jugadores conocidos:</b> quien ya ha completado una conexión real (como cualquier jugador, incluso varios tras la misma IP: colegio, móvil, proxy) tiene <b>4 veces más margen</b>, solo se le bloquea ante un flood enorme (10 veces más) y entonces <b>60 segundos</b>, no 15 minutos. El bloqueo largo queda para IPs que mandan muchas conexiones <b>sin completar ninguna</b>, que es lo que hace un ataque. Para un evento puntual, <b>Observación</b> es la opción más segura.</p>
                             <label class="check"><input type="radio" name="ban_mode" value="monitor" {{ $banMode === 'monitor' ? 'checked' : '' }}>
                                 <span><b>Observación</b> — nunca bloquea una IP<small>Solo frena el exceso de paquetes. Es el modo más seguro contra falsos positivos; úsalo para comprobar qué haría el firewall.</small></span></label>
                             <label class="check"><input type="radio" name="ban_mode" value="balanced" {{ $banMode === 'balanced' ? 'checked' : '' }}>

@@ -96,6 +96,11 @@ HL_SMALL=(--hashlimit-htable-size 4096 --hashlimit-htable-max 65536)
 
 AMP_SPORTS="17,19,53,111,123,137,161,389,520,1900,3283,3702,5353,11211"
 
+KNOWN_FACTOR=4
+KNOWN_CONN_FACTOR=4
+KNOWN_BAN_FACTOR=10
+KNOWN_BAN_SECONDS=60
+
 own_ips() {
     local list
     list="$(ip -o -4 addr show 2>/dev/null | awk '{ for (i = 1; i <= NF; i++) if ($i == "inet") { sub(/\/.*/, "", $(i + 1)); if ($(i + 1) !~ /^127\./) print $(i + 1) } }')"
@@ -186,7 +191,7 @@ remove_rules() {
     while ipt -t raw    -D PREROUTING -j ANTIDDOS   2>/dev/null; do :; done
     while ipt -t mangle -D PREROUTING -j ANTIDDOS_M 2>/dev/null; do :; done
     local spec
-    for spec in "raw ANTIDDOS" "raw VS_SYNFLOOD" "raw VS_SSHBAN" "raw ANTIDDOS_AMP" "raw ANTIDDOS_D_SLIM" "raw ANTIDDOS_CTCP" "raw ANTIDDOS_CUDP" "raw ANTIDDOS_CSYN" \
+    for spec in "raw ANTIDDOS" "raw VS_SYNFLOOD" "raw VS_SYNFLOODK" "raw VS_SSHBAN" "raw ANTIDDOS_AMP" "raw ANTIDDOS_D_SLIM" "raw ANTIDDOS_CTCP" "raw ANTIDDOS_CUDP" "raw ANTIDDOS_CSYN" \
                  "raw ANTIDDOS_D_BAN" "raw ANTIDDOS_D_MAL" "raw ANTIDDOS_D_ICMP" "raw ANTIDDOS_D_UDP" "raw ANTIDDOS_D_WEB" "mangle ANTIDDOS_M" "mangle ANTIDDOS_M_INV"; do
         # shellcheck disable=SC2086
         set -- $spec
@@ -200,6 +205,7 @@ apply_rules() {
     remove_rules
 
     ipt -t raw -N VS_SYNFLOOD
+    ipt -t raw -N VS_SYNFLOODK
     ipt -t raw -N VS_SSHBAN
     ipt -t raw -N ANTIDDOS_CTCP
     ipt -t raw -N ANTIDDOS_CUDP
@@ -219,6 +225,9 @@ apply_rules() {
     ipt -t raw -A VS_SYNFLOOD -m limit --limit 6/min --limit-burst 3 -j LOG --log-prefix "ANTIDDOS ban syn " --log-level 4
     ipt -t raw -A VS_SYNFLOOD -j SET --add-set vs_ban src --exist --timeout "$BAN_SECONDS"
     ipt -t raw -A VS_SYNFLOOD -j DROP
+    ipt -t raw -A VS_SYNFLOODK -m limit --limit 6/min --limit-burst 3 -j LOG --log-prefix "ANTIDDOS ban syn-known " --log-level 4
+    ipt -t raw -A VS_SYNFLOODK -j SET --add-set vs_ban src --exist --timeout "$KNOWN_BAN_SECONDS"
+    ipt -t raw -A VS_SYNFLOODK -j DROP
     ipt -t raw -A VS_SSHBAN -m limit --limit 6/min --limit-burst 3 -j LOG --log-prefix "ANTIDDOS ban ssh " --log-level 4
     ipt -t raw -A VS_SSHBAN -j SET --add-set vs_ban_ssh src --exist --timeout "$BAN_SECONDS"
     ipt -t raw -A VS_SSHBAN -j DROP
@@ -258,6 +267,7 @@ apply_rules() {
     local a_udp_rate=$(( UDP_RATE / 2 > 200 ? UDP_RATE / 2 : 200 )) a_udp_burst=$(( UDP_BURST / 2 > 400 ? UDP_BURST / 2 : 400 ))
     local a_conn=$(( CONN_LIMIT / 2 > 10 ? CONN_LIMIT / 2 : 10 ))
     local -a UNKNOWN=(-m set ! --match-set vs_trusted src)
+    local -a KNOWN=(-m set --match-set vs_trusted src)
 
     for c in "${TCPC[@]}"; do
         "${R[@]}" -p tcp -m multiport --dports "$c" -j ANTIDDOS_CTCP
@@ -277,17 +287,28 @@ apply_rules() {
         ban_rate=$(( SYN_RATE * 3 )); ban_burst=$(( SYN_BURST * 3 )); ssh_rate="20/minute"; ssh_burst=20
     fi
 
+    local known_ban_rate=$(( ban_rate * KNOWN_BAN_FACTOR )) known_ban_burst=$(( ban_burst * KNOWN_BAN_FACTOR ))
+    local known_syn_rate=$(( SYN_RATE * KNOWN_FACTOR )) known_syn_burst=$(( SYN_BURST * KNOWN_FACTOR ))
+
     for c in "${TCPC[@]}"; do
         if [[ "$BAN_MODE" != "monitor" ]]; then
-            "${R[@]}" -p tcp --syn -m multiport --dports "$c" \
+            "${R[@]}" -p tcp --syn -m multiport --dports "$c" "${UNKNOWN[@]}" \
                 -m hashlimit --hashlimit-name vs_synban --hashlimit-mode srcip "${HL_BIG[@]}" \
                 --hashlimit-above "${ban_rate}/second" --hashlimit-burst "$ban_burst" \
                 -j VS_SYNFLOOD
+            "${R[@]}" -p tcp --syn -m multiport --dports "$c" "${KNOWN[@]}" \
+                -m hashlimit --hashlimit-name vs_synbanK --hashlimit-mode srcip "${HL_BIG[@]}" \
+                --hashlimit-above "${known_ban_rate}/second" --hashlimit-burst "$known_ban_burst" \
+                -j VS_SYNFLOODK
         fi
         if [[ "$BAN_MODE" != "strict" ]]; then
-            "${R[@]}" -p tcp --syn -m multiport --dports "$c" \
+            "${R[@]}" -p tcp --syn -m multiport --dports "$c" "${UNKNOWN[@]}" \
                 -m hashlimit --hashlimit-name vs_syn --hashlimit-mode srcip "${HL_BIG[@]}" \
                 --hashlimit-above "${SYN_RATE}/second" --hashlimit-burst "$SYN_BURST" \
+                -j ANTIDDOS_D_SLIM
+            "${R[@]}" -p tcp --syn -m multiport --dports "$c" "${KNOWN[@]}" \
+                -m hashlimit --hashlimit-name vs_synK --hashlimit-mode srcip "${HL_BIG[@]}" \
+                --hashlimit-above "${known_syn_rate}/second" --hashlimit-burst "$known_syn_burst" \
                 -j ANTIDDOS_D_SLIM
         fi
         if [[ "${ATTACK_MODE}" == "1" ]]; then
@@ -348,8 +369,10 @@ apply_rules() {
             ipt -t mangle -A ANTIDDOS_M -p tcp --syn -m multiport --dports "$c" "${UNKNOWN[@]}" \
                 -m connlimit --connlimit-above "$a_conn" --connlimit-mask 32 --connlimit-saddr -j DROP
         fi
-        ipt -t mangle -A ANTIDDOS_M -p tcp --syn -m multiport --dports "$c" \
+        ipt -t mangle -A ANTIDDOS_M -p tcp --syn -m multiport --dports "$c" "${UNKNOWN[@]}" \
             -m connlimit --connlimit-above "$CONN_LIMIT" --connlimit-mask 32 --connlimit-saddr -j DROP
+        ipt -t mangle -A ANTIDDOS_M -p tcp --syn -m multiport --dports "$c" "${KNOWN[@]}" \
+            -m connlimit --connlimit-above "$(( CONN_LIMIT * KNOWN_CONN_FACTOR ))" --connlimit-mask 32 --connlimit-saddr -j DROP
     done
     for c in "${UDPC[@]}"; do
         ipt -t mangle -A ANTIDDOS_M -p udp -m multiport --dports "$c" -m conntrack --ctstate ESTABLISHED \
@@ -595,7 +618,7 @@ read_counters() {
             if (chain == "ANTIDDOS_D_ICMP") { dicmp += $1; dbytes += $2 }
             if (chain == "ANTIDDOS_D_UDP")  { dudp  += $1; dbytes += $2 }
             if (chain == "ANTIDDOS_D_WEB")  { dweb  += $1; dbytes += $2 }
-            if (chain == "VS_SYNFLOOD" || chain == "VS_SSHBAN" || chain == "ANTIDDOS_D_SLIM") { dsyn += $1; dbytes += $2 }
+            if (chain == "VS_SYNFLOOD" || chain == "VS_SYNFLOODK" || chain == "VS_SSHBAN" || chain == "ANTIDDOS_D_SLIM") { dsyn += $1; dbytes += $2 }
             # mangle: limite de conexiones simultaneas y TCP fuera de conexion (cuenta como malformado).
             if (chain == "ANTIDDOS_M")      { dconn += $1; dbytes += $2 }
             if (chain == "ANTIDDOS_M_INV")  { dmal  += $1; dbytes += $2 }
@@ -768,7 +791,7 @@ cmd_status() {
     if [[ "$ATTACK_MODE" == "1" ]]; then
         echo "  Modo ataque     : límites más estrictos SOLO para IPs desconocidas; los jugadores ya conectados conservan los normales"
     fi
-    echo "  Jugadores conocidos: $(count_set vs_trusted) IPs (sesión establecida reciente, exentas de los límites extra del modo ataque)"
+    echo "  Jugadores conocidos: $(count_set vs_trusted) IPs (sesión establecida reciente: límites ${KNOWN_FACTOR}x más holgados y, si los superan, bloqueo de solo ${KNOWN_BAN_SECONDS}s)"
     echo "  TCP efectivos   : $(ports_minus "$TCP_PORTS" "$(reserved_ports)") (sin los reservados: $(reserved_ports))"
     echo "  Panel (sync)    : ${PANEL_URL:-no configurado}"
     if have ipset; then
