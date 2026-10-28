@@ -16,12 +16,21 @@ class HealthCheck
         'antiddos_settings', 'antiddos_blocks', 'antiddos_events', 'antiddos_agents', 'antiddos_metrics', 'antiddos_net_blocks',
     ];
 
+    public function missingTables(): array
+    {
+        try {
+            return array_values(array_filter(self::TABLES, fn (string $t) => !Schema::hasTable($t)));
+        } catch (\Throwable $e) {
+            return [];
+        }
+    }
+
     public function run(?string $requestIp = null): array
     {
         $version = $this->version();
         $checks = [];
 
-        $missing = array_values(array_filter(self::TABLES, fn (string $t) => !Schema::hasTable($t)));
+        $missing = $this->missingTables();
         $checks[] = $missing === []
             ? $this->item('db', 'Base de datos', 'ok', 'Todas las tablas están creadas.')
             : $this->item('db', 'Base de datos', 'error', 'Faltan tablas: ' . implode(', ', $missing) . '.', 'sudo antiddos reinstall');
@@ -61,7 +70,7 @@ class HealthCheck
                 : $this->item('ip', 'IP real de los visitantes', 'ok', "El panel ve tu IP pública ({$requestIp})."));
         }
 
-        $agents = ShieldAgent::query()->orderBy('host')->get();
+        $agents = in_array('antiddos_agents', $missing, true) ? new Collection() : ShieldAgent::query()->orderBy('host')->get();
         $nodes = $this->nodes($agents, $version);
 
         $errors = collect($checks)->where('level', 'error')->count() + collect($nodes)->where('level', 'error')->count();

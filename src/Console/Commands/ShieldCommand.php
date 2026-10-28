@@ -4,6 +4,7 @@ namespace Pterodactyl\Extensions\AntiDDoS\Console\Commands;
 
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Pterodactyl\Extensions\AntiDDoS\Models\ShieldBlock;
@@ -139,6 +140,10 @@ class ShieldCommand extends Command
                 Schema::drop($table);
                 $this->line("Tabla eliminada: $table");
             }
+        }
+
+        if (Schema::hasTable('migrations')) {
+            DB::table('migrations')->where('migration', 'like', '%antiddos%')->delete();
         }
 
         ShieldSetting::flush();

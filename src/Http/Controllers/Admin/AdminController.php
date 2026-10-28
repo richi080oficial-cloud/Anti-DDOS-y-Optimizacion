@@ -55,6 +55,12 @@ class AdminController extends Controller
 
     public function index(Request $request): View
     {
+        $missing = app(HealthCheck::class)->missingTables();
+
+        if ($missing !== []) {
+            return view('antiddos::admin.repair', ['missing' => $missing, 'version' => app(HealthCheck::class)->version()]);
+        }
+
         $settings = ShieldSetting::snapshot();
         $health = app(HealthCheck::class)->run($request->ip());
 
